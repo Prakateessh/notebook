@@ -1,17 +1,23 @@
 // src/components/controls/ProbabilityPanel.jsx
 //
-// Probability Panel Compartment
+// Probability Panel Compartment — NOTEBOOK CELL EDITION
 // -----------------------------------------------------------------------
-// Real-time |amplitude|^2 percentages, computed via the injected
-// prob() stdlib function. Renders as animated horizontal bars —
-// one per basis state component of the current evaluation result.
+// MODIFIED: now takes a `cellId` prop and reads that specific cell's
+// evaluation slice, instead of a single global slice.
 //
-// IMPORTANT ASSUMPTION: this panel only makes sense when the
-// evaluation result is a STATE VECTOR (a column vector of amplitudes),
-// not an arbitrary matrix (e.g. a bare gate like `H` alone, or a
-// 2x2 result from A*B where A,B aren't state-related). We detect
-// "is this a column vector" heuristically and show a neutral empty
-// state otherwise, rather than crashing or showing nonsense bars.
+// Also restyled to be more compact, since this now lives inside a
+// two-column strip (PlaybackControls | ProbabilityPanel) at the bottom
+// of each notebook cell card, rather than occupying its own full bento
+// compartment. Bar height and label sizing are reduced to fit, but all
+// functionality — state-vector detection, Born-rule computation, basis
+// labeling — is fully preserved from the original file, nothing cut.
+//
+// IMPORTANT ASSUMPTION (unchanged from original): this panel only makes
+// sense when the evaluation result is a STATE VECTOR (a column vector
+// of amplitudes), not an arbitrary matrix (e.g. a bare gate like `H`
+// alone, or a 2x2 result from A*B where A,B aren't state-related). We
+// detect "is this a column vector" heuristically and show a neutral
+// empty state otherwise, rather than crashing or showing nonsense bars.
 //
 // Basis labels: for an n-dimensional state vector, log2(n) qubits
 // are inferred, and labels are generated as |000>, |001>, etc.
@@ -73,21 +79,28 @@ function generateBasisLabels(count) {
   );
 }
 
-export function ProbabilityPanel() {
-  const result = useQuantumStore((s) => s.evaluation.result);
-  const error = useQuantumStore((s) => s.evaluation.error);
+/**
+ * @param {object} props
+ * @param {string} props.cellId - which cell in the store this panel
+ *        reads its evaluation result from. Scopes the component so
+ *        multiple ProbabilityPanel instances (one per notebook cell)
+ *        never read or display the wrong cell's data.
+ */
+export function ProbabilityPanel({ cellId }) {
+  const result = useQuantumStore((s) => s.cells[cellId]?.evaluation.result);
+  const error = useQuantumStore((s) => s.cells[cellId]?.evaluation.error);
 
   const stateVector = extractStateVector(result);
 
   if (error || !stateVector) {
     return (
-      <div className="flex h-full flex-col">
-        <h2 className="mb-3 text-sm font-medium tracking-wide text-slate-400">
-          PROBABILITY
-        </h2>
-        <div className="flex flex-1 items-center justify-center">
-          <p className="text-center text-xs text-slate-600">
-            {error ? "—" : "Evaluate a state vector to see probabilities"}
+      <div className="flex flex-col">
+        <h3 className="mb-2 font-mono text-[10px] uppercase tracking-wider text-slate-600">
+          Probability
+        </h3>
+        <div className="flex flex-1 items-center">
+          <p className="text-[11px] text-slate-700">
+            {error ? "—" : "No state vector"}
           </p>
         </div>
       </div>
@@ -102,12 +115,12 @@ export function ProbabilityPanel() {
   const labels = generateBasisLabels(stateVector.length);
 
   return (
-    <div className="flex h-full flex-col">
-      <h2 className="mb-3 text-sm font-medium tracking-wide text-slate-400">
-        PROBABILITY
-      </h2>
+    <div className="flex flex-col">
+      <h3 className="mb-2 font-mono text-[10px] uppercase tracking-wider text-slate-600">
+        Probability
+      </h3>
 
-      <div className="flex flex-1 flex-col justify-center gap-2.5">
+      <div className="flex flex-col gap-1.5">
         {probabilities.map((p, i) => (
           <ProbabilityBar key={i} label={labels[i]} probability={p} />
         ))}
@@ -126,11 +139,11 @@ function ProbabilityBar({ label, probability }) {
   const percent = Math.round(probability * 1000) / 10; // one decimal place
 
   return (
-    <div className="flex items-center gap-3">
-      <span className="w-14 shrink-0 font-mono text-xs text-slate-400">
+    <div className="flex items-center gap-2">
+      <span className="w-10 shrink-0 font-mono text-[10px] text-slate-500">
         {label}
       </span>
-      <div className="relative h-2 flex-1 overflow-hidden rounded-full bg-slate-800/60">
+      <div className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-slate-800/60">
         <motion.div
           className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-cyan-400 to-fuchsia-400"
           initial={{ width: 0 }}
@@ -138,7 +151,7 @@ function ProbabilityBar({ label, probability }) {
           transition={{ type: "spring", stiffness: 220, damping: 26 }}
         />
       </div>
-      <span className="w-12 shrink-0 text-right font-mono text-xs text-slate-300">
+      <span className="w-9 shrink-0 text-right font-mono text-[10px] text-slate-400">
         {percent}%
       </span>
     </div>

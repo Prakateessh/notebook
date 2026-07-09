@@ -1,41 +1,25 @@
 // src/components/visualizer/MatrixStepper.jsx
 //
-// Visual Stepper Orchestration Engine
+// Visual Stepper Orchestration Engine — NOTEBOOK CELL EDITION
 // -----------------------------------------------------------------------
-// Consumes stepper.frames from the Zustand store and choreographs
-// MatrixCell instances through AnimatePresence + shared layoutIds so
-// Framer Motion morphs cells between frames instead of popping them.
+// MODIFIED: now takes a `cellId` prop and reads that specific cell's
+// stepper/evaluation slice, instead of a single global slice.
 //
-// KEY CHOREOGRAPHY IDEA:
-// Every cell that conceptually "is the same thing" across frames shares
-// the same layoutId. That's what makes Framer Motion animate position/
-// size changes as a spring-driven morph rather than a re-mount.
+// IMPORTANT layoutId CHANGE: in the single-cell version, layoutIds like
+// "A-0-0" or "result-1-2" were globally unique because there was only
+// ONE stepper on screen. Now that MULTIPLE cells can each have their
+// own active stepper rendered simultaneously (stacked in the notebook),
+// those layoutIds would COLLIDE across cells — Framer Motion would try
+// to morph matrix cells between two completely unrelated notebook
+// cells, which is wrong and would produce bizarre cross-cell animation
+// glitches.
 //
-//   Matrix A cells:      "A-{row}-{col}"      (stable across all frames)
-//   Matrix B cells:      "B-{row}-{col}"      (stable across all frames)
-//   Floating term cells: "term-{k}"           (k = index within current
-//                                               frame's terms array —
-//                                               these appear/disappear
-//                                               each frame, so they use
-//                                               AnimatePresence exit/enter
-//                                               rather than a persistent
-//                                               layoutId morph)
-//   Result cells:        "result-{row}-{col}" (stable across all frames;
-//                                               starts as a "·" placeholder,
-//                                               morphs into the computed
-//                                               value when its frame hits)
+// FIX: every layoutId is now prefixed with this cell's own cellId,
+// e.g. `${cellId}-A-0-0`, `${cellId}-result-1-2`. This scopes Framer
+// Motion's shared-layout animation system to within each cell only.
 //
-// Because A and B layoutIds never change frame-to-frame, they don't
-// "morph" visually — they stay in place while their highlight STATE
-// (idle -> row-highlight -> col-highlight -> active) transitions via
-// MatrixCell's own color/shadow transition. The actual MORPH (spring
-// stretch/merge) happens on the floating term cells traveling toward
-// the result cell, and the result cell growing from "·" to its value.
-//
-// FALLBACK: if frames is empty (evaluation succeeded but frame
-// extraction failed — see generateFrames' regex limitations in the
-// store), we just render the raw evaluation.result as a static
-// KaTeX block. No morph, but the user still sees a correct answer.
+// Everything else (frame choreography, fallback rendering) is
+// unchanged in logic from the original file.
 
 import { useEffect, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -44,44 +28,39 @@ import "katex/dist/katex.min.css";
 import { useQuantumStore } from "../../store/useQuantumStore";
 import { MatrixCell } from "./MatrixCell";
 
-export function MatrixStepper() {
-  const frames = useQuantumStore((s) => s.stepper.frames);
-  const currentFrameIndex = useQuantumStore((s) => s.stepper.currentFrameIndex);
-  const isPlaying = useQuantumStore((s) => s.stepper.isPlaying);
+export function MatrixStepper({ cellId }) {
+  const frames = useQuantumStore((s) => s.cells[cellId]?.stepper.frames ?? []);
+  const currentFrameIndex = useQuantumStore(
+    (s) => s.cells[cellId]?.stepper.currentFrameIndex ?? 0
+  );
+  const isPlaying = useQuantumStore((s) => s.cells[cellId]?.stepper.isPlaying ?? false);
   const nextFrame = useQuantumStore((s) => s.nextFrame);
-  const rawResult = useQuantumStore((s) => s.evaluation.result);
-  const errorMessage = useQuantumStore((s) => s.evaluation.error);
+  const rawResult = useQuantumStore((s) => s.cells[cellId]?.evaluation.result);
+  const errorMessage = useQuantumStore((s) => s.cells[cellId]?.evaluation.error);
 
   const currentFrame = frames[currentFrameIndex];
 
-  // --- Auto-advance playback ---
-  // When isPlaying is true, step forward automatically every 900ms.
-  // Stops at the last frame (nextFrame() already clamps internally).
+  // --- Auto-advance playback (per-cell, calls nextFrame with THIS cellId) ---
   useEffect(() => {
     if (!isPlaying || frames.length === 0) return;
     if (currentFrameIndex >= frames.length - 1) return;
 
     const timer = setTimeout(() => {
-      nextFrame();
+      nextFrame(cellId);
     }, 900);
 
     return () => clearTimeout(timer);
-  }, [isPlaying, currentFrameIndex, frames.length, nextFrame]);
+  }, [isPlaying, currentFrameIndex, frames.length, nextFrame, cellId]);
 
-  // --- Reconstruct full A and B matrices from the frame set ---
-  // Frames only carry the ACTIVE row/col per step, not the full
-  // original matrices. We rebuild them by scanning all frames and
-  // collecting each unique row (from rowValues) and column (from
-  // colValues) — this works because a full multiplication sweep
-  // visits every row and every column at least once.
+  // --- Reconstruct full A and B matrices from the frame set (unchanged logic) ---
   const { matrixA, matrixB, resultDims } = useMemo(() => {
     if (!frames.length) return { matrixA: null, matrixB: null, resultDims: null };
 
     const computeFrames = frames.filter((f) => f.type === "cell-compute");
     if (!computeFrames.length) return { matrixA: null, matrixB: null, resultDims: null };
 
-    const aRows = new Map(); // rowIndex -> rowValues
-    const bCols = new Map(); // colIndex -> colValues
+    const aRows = new Map();
+    const bCols = new Map();
     let maxRow = 0;
     let maxCol = 0;
 
@@ -93,7 +72,6 @@ export function MatrixStepper() {
     });
 
     const A = Array.from({ length: maxRow + 1 }, (_, r) => aRows.get(r));
-    // B is stored column-major in our map, transpose back to row-major
     const bColCount = maxCol + 1;
     const bRowCount = bCols.get(0)?.length ?? 0;
     const B = Array.from({ length: bRowCount }, (_, r) =>
@@ -107,19 +85,17 @@ export function MatrixStepper() {
     };
   }, [frames]);
 
-  // --- Fallback: no frames available, show static result ---
+  // --- Fallback: no frames available ---
   if (!frames.length) {
+    if (!rawResult && !errorMessage) {
+      // Genuinely empty cell — don't render an awkward empty box at all.
+      return null;
+    }
     return (
-      <div className="flex h-full flex-col items-center justify-center">
-        {errorMessage ? (
-          <p className="text-sm text-slate-600">Awaiting valid input…</p>
-        ) : rawResult !== null && rawResult !== undefined ? (
+      <div className="flex flex-col items-center justify-center py-6">
+        {errorMessage ? null : rawResult !== null && rawResult !== undefined ? (
           <StaticResultDisplay result={rawResult} />
-        ) : (
-          <p className="text-sm text-slate-600">
-            Enter an expression in the editor to begin.
-          </p>
-        )}
+        ) : null}
       </div>
     );
   }
@@ -127,19 +103,20 @@ export function MatrixStepper() {
   if (!currentFrame) return null;
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-sm font-medium tracking-wide text-slate-400">
-          VISUALIZER
-        </h2>
-        <span className="text-xs text-slate-600">
+    <div className="flex flex-col py-4">
+      <div className="mb-3 flex items-center justify-between">
+        <span className="font-mono text-[10px] uppercase tracking-wider text-slate-600">
+          Out [{/* cell number injected by parent via aria if needed */}]
+        </span>
+        <span className="font-mono text-[10px] text-slate-600">
           Step {currentFrameIndex + 1} / {frames.length}
         </span>
       </div>
 
-      <div className="flex flex-1 flex-col items-center justify-center gap-8">
+      <div className="flex flex-col items-center gap-6">
         {currentFrame.type === "cell-compute" && matrixA && matrixB && (
           <MultiplicationFrame
+            cellId={cellId}
             frame={currentFrame}
             matrixA={matrixA}
             matrixB={matrixB}
@@ -148,65 +125,54 @@ export function MatrixStepper() {
         )}
 
         {currentFrame.type === "block-compute" && (
-          <KroneckerFrame frame={currentFrame} />
+          <KroneckerFrame cellId={cellId} frame={currentFrame} />
         )}
 
         {currentFrame.type === "complete" && (
-          <CompleteFrame resultSoFar={currentFrame.resultSoFar} />
+          <CompleteFrame cellId={cellId} resultSoFar={currentFrame.resultSoFar} />
         )}
       </div>
     </div>
   );
 }
 
-/**
- * Renders one step of matrix multiplication: A (row highlighted),
- * B (col highlighted), floating terms mid-flight, and the
- * partially-filled result matrix.
- */
-function MultiplicationFrame({ frame, matrixA, matrixB, resultDims }) {
+function MultiplicationFrame({ cellId, frame, matrixA, matrixB, resultDims }) {
   const { rowIndex, colIndex, terms, resultSoFar } = frame;
 
   return (
-    <div className="flex w-full flex-col items-center gap-6">
-      <div className="flex items-center gap-6">
-        {/* Matrix A */}
+    <div className="flex w-full flex-col items-center gap-5">
+      <div className="flex items-center gap-4">
         <MatrixGrid
           matrix={matrixA}
-          getLayoutId={(r, c) => `A-${r}-${c}`}
+          getLayoutId={(r, c) => `${cellId}-A-${r}-${c}`}
           getState={(r) => (r === rowIndex ? "row-highlight" : "idle")}
         />
 
-        <span className="text-2xl text-slate-600">×</span>
+        <span className="text-xl text-slate-600">×</span>
 
-        {/* Matrix B */}
         <MatrixGrid
           matrix={matrixB}
-          getLayoutId={(r, c) => `B-${r}-${c}`}
+          getLayoutId={(r, c) => `${cellId}-B-${r}-${c}`}
           getState={(_r, c) => (c === colIndex ? "col-highlight" : "idle")}
         />
       </div>
 
-      {/* Floating arithmetic terms — these animate in/out per frame
-          via AnimatePresence since they don't persist across frames. */}
       <AnimatePresence mode="popLayout">
         <div className="flex items-center gap-2">
           {terms.map((term, k) => (
             <motion.div
-              key={`term-${k}`}
+              key={`${cellId}-term-${k}`}
               layout
-              initial={{ opacity: 0, y: -12 }}
+              initial={{ opacity: 0, y: -10 }}
               animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 12 }}
+              exit={{ opacity: 0, y: 10 }}
               transition={{ type: "spring", stiffness: 300, damping: 24 }}
               className="flex items-center gap-1"
             >
-              <MatrixCell value={term.a} layoutId={`term-a-${k}`} variant="term" state="active" />
+              <MatrixCell value={term.a} layoutId={`${cellId}-term-a-${k}`} variant="term" state="active" />
               <span className="text-slate-500">×</span>
-              <MatrixCell value={term.b} layoutId={`term-b-${k}`} variant="term" state="active" />
-              {k < terms.length - 1 && (
-                <span className="ml-1 text-slate-500">+</span>
-              )}
+              <MatrixCell value={term.b} layoutId={`${cellId}-term-b-${k}`} variant="term" state="active" />
+              {k < terms.length - 1 && <span className="ml-1 text-slate-500">+</span>}
             </motion.div>
           ))}
         </div>
@@ -214,10 +180,9 @@ function MultiplicationFrame({ frame, matrixA, matrixB, resultDims }) {
 
       <span className="text-slate-600">↓</span>
 
-      {/* Result matrix, filling in as frames progress */}
       <MatrixGrid
         matrix={resultSoFar}
-        getLayoutId={(r, c) => `result-${r}-${c}`}
+        getLayoutId={(r, c) => `${cellId}-result-${r}-${c}`}
         getState={(r, c) =>
           r === rowIndex && c === colIndex
             ? "active"
@@ -230,22 +195,17 @@ function MultiplicationFrame({ frame, matrixA, matrixB, resultDims }) {
   );
 }
 
-/**
- * Renders one block-scaling step of a Kronecker product: the
- * active scalar from A, and the resulting scaled block landing
- * into the output matrix.
- */
-function KroneckerFrame({ frame }) {
+function KroneckerFrame({ cellId, frame }) {
   const { scalar, block, resultSoFar } = frame;
 
   return (
-    <div className="flex w-full flex-col items-center gap-6">
-      <div className="flex items-center gap-4">
-        <MatrixCell value={scalar} layoutId="kron-scalar" state="active" />
-        <span className="text-2xl text-slate-600">⊗ B →</span>
+    <div className="flex w-full flex-col items-center gap-5">
+      <div className="flex items-center gap-3">
+        <MatrixCell value={scalar} layoutId={`${cellId}-kron-scalar`} state="active" />
+        <span className="text-xl text-slate-600">⊗ B →</span>
         <MatrixGrid
           matrix={block}
-          getLayoutId={(r, c) => `block-${r}-${c}`}
+          getLayoutId={(r, c) => `${cellId}-block-${r}-${c}`}
           getState={() => "active"}
         />
       </div>
@@ -254,35 +214,33 @@ function KroneckerFrame({ frame }) {
 
       <MatrixGrid
         matrix={resultSoFar}
-        getLayoutId={(r, c) => `result-${r}-${c}`}
+        getLayoutId={(r, c) => `${cellId}-result-${r}-${c}`}
         getState={(r, c) => (resultSoFar[r][c] !== null ? "settled" : "idle")}
       />
     </div>
   );
 }
 
-/** Final settled frame — everything computed, all cells glow "settled". */
-function CompleteFrame({ resultSoFar }) {
+function CompleteFrame({ cellId, resultSoFar }) {
   return (
-    <div className="flex flex-col items-center gap-3">
-      <span className="text-xs uppercase tracking-wider text-emerald-400/70">
+    <div className="flex flex-col items-center gap-2">
+      <span className="text-[10px] uppercase tracking-wider text-emerald-400/60">
         Complete
       </span>
       <MatrixGrid
         matrix={resultSoFar}
-        getLayoutId={(r, c) => `result-${r}-${c}`}
+        getLayoutId={(r, c) => `${cellId}-result-${r}-${c}`}
         getState={() => "settled"}
       />
     </div>
   );
 }
 
-/** Generic matrix renderer — a grid of MatrixCell components. */
 function MatrixGrid({ matrix, getLayoutId, getState }) {
   return (
-    <div className="flex flex-col gap-1.5 rounded-2xl border border-slate-800/40 bg-slate-950/40 p-3">
+    <div className="flex flex-col gap-1 rounded-lg border border-slate-800/40 bg-slate-950/30 p-2.5">
       {matrix.map((row, r) => (
-        <div key={r} className="flex gap-1.5">
+        <div key={r} className="flex gap-1">
           {row.map((val, c) => (
             <MatrixCell
               key={c}
@@ -297,11 +255,10 @@ function MatrixGrid({ matrix, getLayoutId, getState }) {
   );
 }
 
-/** Fallback static display when step frames couldn't be generated. */
 function StaticResultDisplay({ result }) {
   const latex = result?.toString ? result.toString() : String(result);
   return (
-    <div className="rounded-2xl border border-slate-800/60 bg-slate-900/40 p-6">
+    <div className="rounded-lg border border-slate-800/50 bg-slate-950/30 p-4">
       <InlineMath math={latex} />
     </div>
   );

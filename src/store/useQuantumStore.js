@@ -1,22 +1,29 @@
 // src/store/useQuantumStore.js
 //
-// Central Zustand store for the Quantum Math Scratchpad.
+// Central Zustand store for the Quantum Math Scratchpad — NOTEBOOK EDITION.
 // -----------------------------------------------------------------------
-// Three logical slices, combined in one store (Zustand doesn't need
-// separate files for this to stay organized — slices are just
-// namespaced by key):
+// REWRITE NOTE: previously this store held ONE editor/evaluation/stepper
+// slice for the whole app. Now it holds a `cells` map keyed by cellId,
+// where each cell has its OWN independent editor/evaluation/stepper
+// slice — exactly like independent Jupyter cells.
 //
-//   editor:      raw text input, debounce timer handle
-//   evaluation:  parsed result, error state, detected operation type
-//   stepper:     frame array, current frame index, playback state
+// Shape:
+//   cells: {
+//     [cellId]: {
+//       editor:     { rawInput, debounceTimer },
+//       evaluation: { result, error, operationType },
+//       stepper:    { frames, currentFrameIndex, isPlaying },
+//     }
+//   }
+//   cellOrder: [cellId, cellId, ...]   // display order, top to bottom
 //
-// Why one store instead of three: the stepper needs to react the
-// instant evaluation succeeds, and playback controls need to read
-// stepper state without importing evaluation logic. Keeping them
-// in one Zustand store means components subscribe to ONLY the
-// slice/field they need (via selector functions), so re-renders
-// stay scoped — you get the "separate store" isolation benefit
-// without the cross-file wiring cost.
+// Every action now takes `cellId` as its first argument, so components
+// pass their own cellId in. Selectors follow the same pattern:
+//   useQuantumStore((s) => s.cells[cellId]?.evaluation.error)
+//
+// Math.js instance + stdlib injection remain a SINGLE shared instance
+// across all cells (no reason to duplicate the gate library per cell —
+// I, X, Y, Z, H, CNOT, dagger, prob are constants, not per-cell state).
 
 import { create } from "zustand";
 import { create as createMathInstance, all } from "mathjs";
@@ -27,144 +34,272 @@ import {
   generateKroneckerSteps,
 } from "../lib/stepGenerator";
 
-// --- Math.js instance setup (singleton, created once at module load) ---
 const math = createMathInstance(all);
 injectQuantumStdlib(math);
 
-// Op functions handed to stepGenerator — using math.js versions so
-// complex numbers (e.g. from the Y gate) are handled correctly.
 const mathOps = {
   multiply: math.multiply,
   add: math.add,
 };
 
-/**
- * Detects which "top level" operation the user's raw input represents,
- * so we know whether to call generateMultiplicationSteps or
- * generateKroneckerSteps. This is a light heuristic, not a full parser:
- * it looks for the presence of `kron(` (from preprocessed Dirac
- * multi-qubit states, or explicit user calls) vs a bare `*` between
- * two matrix-looking operands.
- *
- * NOTE: this only affects which STEP ANIMATION we generate for the
- * visualizer. The actual math.evaluate() call always runs regardless,
- * so the numeric answer is correct even if step-detection guesses wrong
- * — worst case, the user sees the multiplication animation instead of
- * the Kronecker block animation, but the final result is right.
- */
 function detectOperationType(preprocessedInput) {
   if (/kron\s*\(/.test(preprocessedInput)) return "kronecker";
   if (/\*/.test(preprocessedInput)) return "multiplication";
   return "unknown";
 }
 
+/** Factory for a brand new, empty cell's state slice. */
+function createEmptyCell() {
+  return {
+    editor: {
+      rawInput: "",
+      debounceTimer: null,
+    },
+    evaluation: {
+      result: null,
+      error: null,
+      operationType: "unknown",
+    },
+    stepper: {
+      frames: [],
+      currentFrameIndex: 0,
+      isPlaying: false,
+    },
+  };
+}
+
+/** Generates a reasonably unique cell id without needing a uuid dependency. */
+function generateCellId() {
+  return `cell-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+const FIRST_CELL_ID = generateCellId();
+
 export const useQuantumStore = create((set, get) => ({
-  // ================= EDITOR SLICE =================
-  editor: {
-    rawInput: "",
-    debounceTimer: null,
+  // ================= NOTEBOOK-LEVEL STATE =================
+  cellOrder: [FIRST_CELL_ID],
+  cells: {
+    [FIRST_CELL_ID]: createEmptyCell(),
   },
 
-  setRawInput: (text) => {
-    set((state) => ({ editor: { ...state.editor, rawInput: text } }));
-  },
-
-  /**
-   * Called by CodeEditor.jsx on every keystroke. Handles the debounce
-   * itself so the component doesn't need its own timer logic.
-   */
-  scheduleEvaluation: (text, delayMs = 500) => {
-    const { editor } = get();
-    if (editor.debounceTimer) clearTimeout(editor.debounceTimer);
-
-    const timer = setTimeout(() => {
-      get().evaluateInput(text);
-    }, delayMs);
-
+  /** Appends a new empty cell to the end of the notebook. */
+  addCell: () => {
+    const newId = generateCellId();
     set((state) => ({
-      editor: { ...state.editor, rawInput: text, debounceTimer: timer },
+      cellOrder: [...state.cellOrder, newId],
+      cells: { ...state.cells, [newId]: createEmptyCell() },
+    }));
+    return newId;
+  },
+
+  /** Removes a cell entirely. No-ops if it's the last remaining cell
+   *  (a notebook should never have zero cells — always at least one). */
+  removeCell: (cellId) => {
+    set((state) => {
+      if (state.cellOrder.length <= 1) return state; // guard: keep >=1 cell
+
+      const { [cellId]: _removed, ...remainingCells } = state.cells;
+      return {
+        cellOrder: state.cellOrder.filter((id) => id !== cellId),
+        cells: remainingCells,
+      };
+    });
+  },
+
+  // ================= PER-CELL EDITOR ACTIONS =================
+
+  setRawInput: (cellId, text) => {
+    set((state) => ({
+      cells: {
+        ...state.cells,
+        [cellId]: {
+          ...state.cells[cellId],
+          editor: { ...state.cells[cellId].editor, rawInput: text },
+        },
+      },
     }));
   },
 
-  /** Called directly on Shift+Enter to skip the debounce wait. */
-  evaluateNow: (text) => {
-    const { editor } = get();
-    if (editor.debounceTimer) clearTimeout(editor.debounceTimer);
-    get().evaluateInput(text);
+  scheduleEvaluation: (cellId, text, delayMs = 500) => {
+    const cell = get().cells[cellId];
+    if (!cell) return;
+    if (cell.editor.debounceTimer) clearTimeout(cell.editor.debounceTimer);
+
+    const timer = setTimeout(() => {
+      get().evaluateInput(cellId, text);
+    }, delayMs);
+
+    set((state) => ({
+      cells: {
+        ...state.cells,
+        [cellId]: {
+          ...state.cells[cellId],
+          editor: { ...state.cells[cellId].editor, rawInput: text, debounceTimer: timer },
+        },
+      },
+    }));
   },
 
-  // ================= EVALUATION SLICE =================
-  evaluation: {
-    result: null, // raw math.js evaluation result
-    error: null, // error message string, or null
-    operationType: "unknown", // "multiplication" | "kronecker" | "unknown"
+  evaluateNow: (cellId, text) => {
+    const cell = get().cells[cellId];
+    if (!cell) return;
+    if (cell.editor.debounceTimer) clearTimeout(cell.editor.debounceTimer);
+    get().evaluateInput(cellId, text);
   },
 
-  evaluateInput: (rawText) => {
+  // ================= PER-CELL EVALUATION =================
+
+  evaluateInput: (cellId, rawText) => {
+    // Guard: ignore empty/whitespace-only input rather than throwing
+    // a confusing "Undefined symbol" error at the user.
+    if (!rawText || !rawText.trim()) {
+      set((state) => ({
+        cells: {
+          ...state.cells,
+          [cellId]: {
+            ...state.cells[cellId],
+            evaluation: { result: null, error: null, operationType: "unknown" },
+            stepper: { frames: [], currentFrameIndex: 0, isPlaying: false },
+          },
+        },
+      }));
+      return;
+    }
+
     try {
       const preprocessed = preprocessDirac(rawText);
-      const result = math.evaluate(preprocessed, {
-        // expose stdlib symbols directly in scope so bare `I`, `X`, etc.
-        // resolve without the user needing to prefix anything
-      });
+      const result = math.evaluate(preprocessed, {});
       const operationType = detectOperationType(preprocessed);
 
-      set(() => ({
-        evaluation: { result, error: null, operationType },
+      set((state) => ({
+        cells: {
+          ...state.cells,
+          [cellId]: {
+            ...state.cells[cellId],
+            evaluation: { result, error: null, operationType },
+          },
+        },
       }));
 
-      // Immediately kick off frame generation for the visualizer.
-      get().generateFrames(preprocessed, operationType);
+      get().generateFrames(cellId, preprocessed, operationType);
     } catch (err) {
       set((state) => ({
-        evaluation: { ...state.evaluation, error: err.message, result: null },
-      }));
-      // Clear stale frames so the visualizer doesn't show an old,
-      // now-incorrect animation next to a fresh error message.
-      set(() => ({
-        stepper: { frames: [], currentFrameIndex: 0, isPlaying: false },
+        cells: {
+          ...state.cells,
+          [cellId]: {
+            ...state.cells[cellId],
+            evaluation: { ...state.cells[cellId].evaluation, error: err.message, result: null },
+            stepper: { frames: [], currentFrameIndex: 0, isPlaying: false },
+          },
+        },
       }));
     }
   },
 
-  // ================= STEPPER SLICE =================
-  stepper: {
-    frames: [],
-    currentFrameIndex: 0,
-    isPlaying: false,
-  },
+  // ================= PER-CELL STEPPER =================
 
-  /**
-   * Attempts to extract two matrix operands from the preprocessed
-   * string and generate step frames. This is intentionally simple:
-   * it looks for the FIRST top-level binary operation matching
-   * "kron(A,B)" or "A*B" patterns already expanded by the Dirac
-   * preprocessor, evaluates each operand separately via math.evaluate,
-   * converts to plain arrays, then calls the appropriate step generator.
-   *
-   * If operands can't be cleanly extracted (e.g. a complex expression
-   * with more than one operation chained), frames are left empty and
-   * the visualizer falls back to just showing the final result
-   * (MatrixStepper.jsx handles that fallback case).
-   */
-  generateFrames: (preprocessedInput, operationType) => {
+  generateFrames: (cellId, preprocessedInput, operationType) => {
     try {
       let frames = [];
 
       if (operationType === "kronecker") {
         const match = preprocessedInput.match(/kron\(([^,]+),(.+)\)$/);
         if (match) {
-          const A = math.evaluate(match[1]).toArray
-            ? math.evaluate(match[1]).toArray()
-            : math.evaluate(match[1]);
-          const B = math.evaluate(match[2]).toArray
-            ? math.evaluate(match[2]).toArray()
-            : math.evaluate(match[2]);
+          const evalA = math.evaluate(match[1]);
+          const evalB = math.evaluate(match[2]);
+          const A = evalA.toArray ? evalA.toArray() : evalA;
+          const B = evalB.toArray ? evalB.toArray() : evalB;
           frames = generateKroneckerSteps(A, B, mathOps);
         }
       } else if (operationType === "multiplication") {
         const parts = preprocessedInput.split("*");
         if (parts.length === 2) {
-          const A = math.evaluate(parts[0]).toArray
-            ? math.evaluate(parts[0]).toArray()
-            : math.evaluate(parts[0]);
+          const evalA = math.evaluate(parts[0]);
+          const evalB = math.evaluate(parts[1]);
+          const A = evalA.toArray ? evalA.toArray() : evalA;
+          const B = evalB.toArray ? evalB.toArray() : evalB;
+          frames = generateMultiplicationSteps(A, B, mathOps);
+        }
+      }
+
+      set((state) => ({
+        cells: {
+          ...state.cells,
+          [cellId]: {
+            ...state.cells[cellId],
+            stepper: { frames, currentFrameIndex: 0, isPlaying: frames.length > 0 },
+          },
+        },
+      }));
+    } catch {
+      set((state) => ({
+        cells: {
+          ...state.cells,
+          [cellId]: {
+            ...state.cells[cellId],
+            stepper: { frames: [], currentFrameIndex: 0, isPlaying: false },
+          },
+        },
+      }));
+    }
+  },
+
+  // ================= PER-CELL PLAYBACK CONTROLS =================
+
+  nextFrame: (cellId) => {
+    set((state) => {
+      const cell = state.cells[cellId];
+      if (!cell) return state;
+      const { frames, currentFrameIndex } = cell.stepper;
+      const next = Math.min(currentFrameIndex + 1, frames.length - 1);
+      return {
+        cells: {
+          ...state.cells,
+          [cellId]: { ...cell, stepper: { ...cell.stepper, currentFrameIndex: next } },
+        },
+      };
+    });
+  },
+
+  prevFrame: (cellId) => {
+    set((state) => {
+      const cell = state.cells[cellId];
+      if (!cell) return state;
+      const prev = Math.max(cell.stepper.currentFrameIndex - 1, 0);
+      return {
+        cells: {
+          ...state.cells,
+          [cellId]: { ...cell, stepper: { ...cell.stepper, currentFrameIndex: prev } },
+        },
+      };
+    });
+  },
+
+  togglePlayback: (cellId) => {
+    set((state) => {
+      const cell = state.cells[cellId];
+      if (!cell) return state;
+      return {
+        cells: {
+          ...state.cells,
+          [cellId]: { ...cell, stepper: { ...cell.stepper, isPlaying: !cell.stepper.isPlaying } },
+        },
+      };
+    });
+  },
+
+  setFrameIndex: (cellId, index) => {
+    set((state) => {
+      const cell = state.cells[cellId];
+      if (!cell) return state;
+      return {
+        cells: {
+          ...state.cells,
+          [cellId]: { ...cell, stepper: { ...cell.stepper, currentFrameIndex: index } },
+        },
+      };
+    });
+  },
+}));
+
+export { math };
