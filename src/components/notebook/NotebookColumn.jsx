@@ -1,28 +1,15 @@
 // src/components/notebook/NotebookColumn.jsx
 //
-// Notebook Column — Left Column Wrapper (REPLACES NotebookShell.jsx)
+// Notebook Column – Left Column Wrapper
 // -----------------------------------------------------------------------
-// This is the left-hand scrollable column rendered inside SplitShell.jsx.
-// Structurally almost identical to the old NotebookShell.jsx, but:
-//
-//   1. No longer sets its own bg-slate-950/light-canvas background —
-//      AmbientBackground.jsx now owns the app's global background,
-//      and this column sits transparently on top of it (so the
-//      gradient mesh/grain is visible behind the notebook column too,
-//      not just behind the visualizer panel).
-//   2. No longer assumes it owns the full viewport height itself —
-//      SplitShell.jsx's parent div handles the height/scroll region;
-//      this component just needs to render its content normally.
-//   3. Renamed from NotebookShell -> NotebookColumn to reflect its new
-//      role as ONE column of a two-column layout, not the entire app shell.
-//
-// You can safely delete the old src/components/notebook/NotebookShell.jsx
-// file now — nothing imports it anymore once App.jsx is updated (final
-// file in this pass).
+// NEW: A book‑icon button in the header opens the Gate Cheatsheet
+// slide‑out panel.
 
+import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useQuantumStore } from "../../store/useQuantumStore";
 import { Cell } from "./Cell";
+import { Cheatsheet } from "../cheatsheet/Cheatsheet";
 import { GENTLE_SETTLE } from "../../lib/motionPresets";
 
 export function NotebookColumn() {
@@ -30,13 +17,12 @@ export function NotebookColumn() {
   const addCell = useQuantumStore((s) => s.addCell);
   const setActiveCell = useQuantumStore((s) => s.setActiveCell);
 
+  const [showCheatsheet, setShowCheatsheet] = useState(false);
+
   const canDelete = cellOrder.length > 1;
 
   const handleAddCell = () => {
     const newId = addCell();
-    // Immediately focus the visualizer panel on the freshly created
-    // cell, so the "video player" doesn't keep showing a now-scrolled-
-    // away previous cell while the user starts typing in the new one.
     setActiveCell(newId);
   };
 
@@ -48,9 +34,22 @@ export function NotebookColumn() {
           <h1 className="font-ui text-sm font-medium tracking-wide text-slate-700">
             quantum-scratchpad
           </h1>
-          <span className="font-code text-xs text-slate-500">
-            {cellOrder.length} {cellOrder.length === 1 ? "cell" : "cells"}
-          </span>
+          <div className="flex items-center gap-3">
+            <span className="font-code text-xs text-slate-500">
+              {cellOrder.length} {cellOrder.length === 1 ? "cell" : "cells"}
+            </span>
+            {/* Cheatsheet toggle button */}
+            <button
+              onClick={() => setShowCheatsheet(true)}
+              className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+              aria-label="Gate Cheatsheet"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
+                <path d="M4 6h16M4 12h16M4 18h12" strokeLinecap="round" />
+                <circle cx="20" cy="18" r="2" fill="currentColor" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         {/* --- Cell list --- */}
@@ -85,6 +84,13 @@ export function NotebookColumn() {
           Add Cell
         </motion.button>
       </div>
+
+      {/* --- Cheatsheet overlay --- */}
+      <AnimatePresence>
+        {showCheatsheet && (
+          <Cheatsheet onClose={() => setShowCheatsheet(false)} />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

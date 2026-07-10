@@ -2,28 +2,11 @@
 //
 // Notebook Cell — Input-Only Card, Split-View Edition (REWRITE)
 // -----------------------------------------------------------------------
-// MAJOR STRUCTURAL CHANGE: this cell no longer embeds MatrixStepper,
-// PlaybackControls, or ProbabilityPanel. Those all moved to the right
-// column's VisualizerPanel.jsx (single instance, shows whichever cell
-// is "active"). This cell is now PURELY the code input + its own
-// header (In [n]:, delete button) — much lighter, which directly
-// addresses your "cramped and awkward" complaint: cells are now small,
-// calm, focused units, and the "video" happens in one dedicated place
-// instead of being duplicated inside every single cell.
-//
-// NEW: sets `activeCellId` in the store whenever this cell's card
-// gains focus (via onFocus on the wrapping div, which catches focus
-// bubbling up from the CodeEditor's textarea inside it) — this is
-// what makes the right panel "auto-switch as you click between cells."
-//
-// NEW MICRO-INTERACTION: cursor-follow tilt effect. As the mouse moves
-// over an unfocused cell, the card subtly tilts in 3D (rotateX/rotateY)
-// toward the cursor position, using TILT_RESPONSE's tight, responsive
-// spring so it feels instantly reactive rather than floaty. This is a
-// CSS 3D trick (perspective + rotateX/Y transforms), not WebGL — an
-// appropriately lightweight touch for something happening on every
-// cell simultaneously, reserving the "real" Three.js budget for the
-// one-time HeroIntro moment as we discussed.
+// NEW: Status indicator dot next to the cell number header:
+//   ● cyan  = active (visualizer is watching this cell)
+//   ● green = evaluated successfully (result exists)
+//   ● red   = evaluation error
+//   ● grey  = empty / not yet evaluated
 
 import { useState, useRef, useCallback } from "react";
 import { motion } from "framer-motion";
@@ -43,6 +26,10 @@ export function Cell({ cellId, cellNumber, canDelete }) {
   const setActiveCell = useQuantumStore((s) => s.setActiveCell);
   const activeCellId = useQuantumStore((s) => s.activeCellId);
   const hasError = useQuantumStore((s) => !!s.cells[cellId]?.evaluation.error);
+  const hasResult = useQuantumStore(
+    (s) => s.cells[cellId]?.evaluation.result !== null &&
+      s.cells[cellId]?.evaluation.result !== undefined
+  );
 
   const isActive = activeCellId === cellId;
 
@@ -50,19 +37,16 @@ export function Cell({ cellId, cellNumber, canDelete }) {
   const [tilt, setTilt] = useState({ x: 0, y: 0 });
   const [isHovering, setIsHovering] = useState(false);
 
-  // --- Cursor-follow tilt: computes rotation based on cursor position
-  //     relative to the card's center. Small max angle (4deg) keeps
-  //     this feeling like a subtle premium touch, not a gimmick. ---
+  // --- Cursor-follow tilt effect ---
   const handleMouseMove = useCallback((e) => {
     if (!cardRef.current) return;
     const rect = cardRef.current.getBoundingClientRect();
-    const px = (e.clientX - rect.left) / rect.width; // 0..1
-    const py = (e.clientY - rect.top) / rect.height; // 0..1
-
+    const px = (e.clientX - rect.left) / rect.width;
+    const py = (e.clientY - rect.top) / rect.height;
     const maxTilt = 4; // degrees
     setTilt({
-      x: (py - 0.5) * -maxTilt * 2, // rotateX: inverted so top tilts toward cursor
-      y: (px - 0.5) * maxTilt * 2, // rotateY
+      x: (py - 0.5) * -maxTilt * 2,
+      y: (px - 0.5) * maxTilt * 2,
     });
   }, []);
 
@@ -70,6 +54,16 @@ export function Cell({ cellId, cellNumber, canDelete }) {
     setIsHovering(false);
     setTilt({ x: 0, y: 0 });
   }, []);
+
+  // Determine status dot color
+  let statusColor = "bg-slate-300"; // default idle
+  if (isActive) {
+    statusColor = "bg-cyan-quantum-500";
+  } else if (hasError) {
+    statusColor = "bg-red-500";
+  } else if (hasResult) {
+    statusColor = "bg-emerald-500";
+  }
 
   return (
     <motion.div
@@ -101,15 +95,14 @@ export function Cell({ cellId, cellNumber, canDelete }) {
           ${isActive ? "border-cyan-quantum-400/60" : "border-slate-200"}
         `}
       >
-        {/* --- Header row: cell number + delete --- */}
+        {/* --- Header row: cell number + status dot + delete --- */}
         <div className="flex items-center justify-between border-b border-slate-200/70 px-4 py-2">
-          <span className="font-code text-xs text-slate-500">
-            In [{cellNumber}]
-            {hasError && <span className="ml-2 font-ui text-red-500/80">error</span>}
-            {isActive && (
-              <span className="ml-2 font-ui text-cyan-quantum-500">● watching</span>
-            )}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className={`inline-block h-2.5 w-2.5 rounded-full ${statusColor}`} />
+            <span className="font-code text-xs text-slate-500">
+              In [{cellNumber}]
+            </span>
+          </div>
 
           <button
             onClick={() => removeCell(cellId)}

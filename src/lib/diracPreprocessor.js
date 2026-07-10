@@ -5,26 +5,23 @@
 // Translates physicist-friendly Dirac notation into valid Math.js
 // expressions BEFORE the string is handed to math.evaluate().
 //
-// BUG FIX: BRA_0 and BRA_1 previously used single-bracket comma syntax
-// ("[1,0]"), which Math.js parses as a 1-D VECTOR, not a 1x2 row
-// MATRIX. This meant multiply(ket, bra) and multiply(bra, ket) calls
-// were mixing a real matrix (kets use semicolon syntax "[1;0]", which
-// correctly creates a 2x1 matrix) with a vector, and Math.js's
-// multiply() has different, incompatible dimension rules for
-// matrix-times-vector vs matrix-times-matrix — producing exactly the
-// "Matrix columns (1) must match Vector length (2)" error. FIX: bras
-// now use double-bracket syntax ("[[1,0]]"), which Math.js correctly
-// parses as a genuine 1x2 row matrix, matching kets' matrix semantics.
-//
 // Supported translations:
 //   |0>            -> [1;0]                (ket, computational basis, 2x1 matrix)
-//   |1>             -> [0;1]
-//   <0|             -> [[1,0]]              (bra = row vector, 1x2 matrix)
-//   <1|             -> [[0,1]]
-//   |00>            -> kron([1;0],[1;0])    (multi-qubit ket, auto-expanded)
-//   <01|            -> kron([[1,0]],[[0,1]]) (multi-qubit bra)
-//   <a|b>           -> multiply(bra_a, ket_b)   (inner product)
-//   |a><b|          -> multiply(ket_a, bra_b)   (outer product)
+//   |1>            -> [0;1]
+//   |+>            -> (1/sqrt(2))*[1;1]    (superposition)
+//   |->            -> (1/sqrt(2))*[1;-1]
+//   |i>            -> (1/sqrt(2))*[1;i]    (imaginary superposition)
+//   |-i>           -> (1/sqrt(2))*[1;-i]
+//   <0|            -> [[1,0]]              (bra = row vector, 1x2 matrix)
+//   <1|            -> [[0,1]]
+//   <+|            -> (1/sqrt(2))*[[1,1]]
+//   <-|            -> (1/sqrt(2))*[[1,-1]]
+//   <i|            -> (1/sqrt(2))*[[1,-i]] (bra is conjugate transpose of ket)
+//   <-i|           -> (1/sqrt(2))*[[1,i]]
+//   |00>           -> kron([1;0],[1;0])    (multi-qubit ket, auto-expanded)
+//   <01|           -> kron([[1,0]],[[0,1]]) (multi-qubit bra)
+//   <a|b>          -> multiply(bra_a, ket_b)   (inner product)
+//   |a><b|         -> multiply(ket_a, bra_b)   (outer product)
 //
 // Design notes:
 // - This is a STRING-LEVEL preprocessor, not a parser. It runs a series
@@ -32,22 +29,26 @@
 //   math.evaluate() can consume directly.
 // - Order of passes matters: outer/inner products must be detected
 //   BEFORE plain kets/bras are expanded, otherwise "|0><1|" would be
-//   torn apart into two independent replacements and lose the
-//   adjacency information needed to know it's an outer product.
+//   torn apart into two independent replacements.
 // - Multi-qubit kets (|00>, |01>, etc.) are expanded qubit-by-qubit
-//   into a chain of kron() calls, since Math.js has no native tensor
-//   product literal syntax. Same applies to multi-qubit bras — kron()
-//   of two proper 1x2 row matrices correctly produces a 1x4 row
-//   matrix, preserving the bra's "row vector" identity through the
-//   expansion (this only works correctly now that bras are true
-//   matrices, not vectors — with the old vector-based bras, kron()
-//   of two 1-D vectors would have produced another 1-D vector, losing
-//   the row-vs-column distinction entirely).
+//   into a chain of kron() calls.
 
 const KET_0 = "[1;0]";
 const KET_1 = "[0;1]";
 const BRA_0 = "[[1,0]]";
 const BRA_1 = "[[0,1]]";
+
+// Superposition states – inserted as scaled column/row vectors.
+// Math.js will evaluate (1/sqrt(2)) * [1;1] correctly.
+const KET_PLUS  = "(1/sqrt(2))*[1;1]";
+const KET_MINUS = "(1/sqrt(2))*[1;-1]";
+const KET_I     = "(1/sqrt(2))*[1;i]";
+const KET_MINUS_I = "(1/sqrt(2))*[1;-i]";
+
+const BRA_PLUS  = "(1/sqrt(2))*[[1,1]]";
+const BRA_MINUS = "(1/sqrt(2))*[[1,-1]]";
+const BRA_I     = "(1/sqrt(2))*[[1,-i]]";   // conjugate of |i>
+const BRA_MINUS_I = "(1/sqrt(2))*[[1,i]]";  // conjugate of |-i>
 
 /**
  * Expands a multi-symbol ket string like "00" or "101" into a
@@ -75,30 +76,75 @@ function expandBra(bits) {
 
 /**
  * Main preprocessor entry point.
- * @param {string} input - raw editor text, e.g. "H * |0>" or "<0|1>"
+ * @param {string} input - raw editor text, e.g. "H * |+>" or "<0|1>"
  * @returns {string} - a string safe to pass to math.evaluate()
  */
 export function preprocessDirac(input) {
   let out = input;
 
   // --- Pass 1: Outer products  |a><b|  ->  multiply(ket_a, bra_b) ---
-  // Matches |bits1><bits2| as a single contiguous unit.
+  // Now also supports superposition kets/bras like |+><-|.
   out = out.replace(
-    /\|([01]+)><([01]+)\|/g,
-    (_, ketBits, braBits) => `multiply(${expandKet(ketBits)},${expandBra(braBits)})`
+    /\|([01+\-i]+)><([01+\-i]+)\|/g,
+    (_, ketBits, braBits) => {
+      const ket = expandSymbolicKet(ketBits);
+      const bra = expandSymbolicBra(braBits);
+      return `multiply(${ket},${bra})`;
+    }
   );
 
   // --- Pass 2: Inner products  <a|b>  ->  multiply(bra_a, ket_b) ---
   out = out.replace(
-    /<([01]+)\|([01]+)>/g,
-    (_, braBits, ketBits) => `multiply(${expandBra(braBits)},${expandKet(ketBits)})`
+    /<([01+\-i]+)\|([01+\-i]+)>/g,
+    (_, braBits, ketBits) => {
+      const bra = expandSymbolicBra(braBits);
+      const ket = expandSymbolicKet(ketBits);
+      return `multiply(${bra},${ket})`;
+    }
   );
 
-  // --- Pass 3: Plain multi-qubit / single-qubit kets  |bits>  ---
-  out = out.replace(/\|([01]+)>/g, (_, bits) => expandKet(bits));
+  // --- Pass 3: Plain kets  |bits>  ---
+  out = out.replace(/\|([01+\-i]+)>/g, (_, bits) => expandSymbolicKet(bits));
 
-  // --- Pass 4: Plain multi-qubit / single-qubit bras  <bits|  ---
-  out = out.replace(/<([01]+)\|/g, (_, bits) => expandBra(bits));
+  // --- Pass 4: Plain bras  <bits|  ---
+  out = out.replace(/<([01+\-i]+)\|/g, (_, bits) => expandSymbolicBra(bits));
 
   return out;
+}
+
+/**
+ * Expands a symbolic ket string (may contain +, -, i as well as 0/1).
+ * If the string is pure 0/1, expands to kron of basis kets.
+ * Otherwise, replaces the entire symbolic label with the corresponding
+ * predefined superposition vector.
+ */
+function expandSymbolicKet(bits) {
+  // If it's a standard multi‑qubit basis ket (only 0 and 1)
+  if (/^[01]+$/.test(bits)) {
+    return expandKet(bits);
+  }
+  // Single‑qubit superposition states
+  switch (bits) {
+    case "+":  return KET_PLUS;
+    case "-":  return KET_MINUS;
+    case "i":  return KET_I;
+    case "-i": return KET_MINUS_I;
+    default:   return `|${bits}>`; // fallback, shouldn't happen with regex guard
+  }
+}
+
+/**
+ * Expands a symbolic bra string (may contain +, -, i as well as 0/1).
+ */
+function expandSymbolicBra(bits) {
+  if (/^[01]+$/.test(bits)) {
+    return expandBra(bits);
+  }
+  switch (bits) {
+    case "+":  return BRA_PLUS;
+    case "-":  return BRA_MINUS;
+    case "i":  return BRA_I;
+    case "-i": return BRA_MINUS_I;
+    default:   return `<${bits}|`;
+  }
 }

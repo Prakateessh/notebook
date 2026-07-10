@@ -2,13 +2,10 @@
 //
 // Visual Stepper Orchestration Engine
 // -----------------------------------------------------------------------
-// BUG FIX: StaticResultDisplay previously called result.toString(),
-// which dumps Math.js's raw bracket-list text form (e.g. "[[0, -i],
-// [i, 0]]") instead of a real matrix layout. FIX: results that are
-// matrices/vectors now render as a proper KaTeX \begin{bmatrix}...\end{bmatrix}
-// block, with each entry formatted through the same rectangular a+bi
-// complex-number logic used everywhere else in the app (MatrixCell).
-// Scalars (plain single numbers) still render as a simple inline value.
+// Updated to support chained multiplications. Frames now carry a
+// `chainStep` property; the MultiplicationFrame uses it to scope
+// layout IDs, preventing Framer Motion from mixing cells of different
+// multiplication phases.
 
 import { useEffect, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -17,6 +14,7 @@ import "katex/dist/katex.min.css";
 import { useQuantumStore } from "../../store/useQuantumStore";
 import { MatrixCell } from "./MatrixCell";
 import { KroneckerStepper } from "./KroneckerStepper";
+import { GateColumnDisplay } from "./GateStepper";
 import { MATRIX_MORPH, PLAYFUL_BOUNCE, cascadeTransition } from "../../lib/motionPresets";
 
 export function MatrixStepper({ cellId }) {
@@ -42,10 +40,15 @@ export function MatrixStepper({ cellId }) {
     return () => clearTimeout(timer);
   }, [isPlaying, currentFrameIndex, frames.length, nextFrame, cellId]);
 
+  // For "cell-compute" frames we extract A and B dimensions from the frames that have the same chainStep.
+  // This memo is still used for the static A/B grids at the top of each multiplication phase.
   const { matrixA, matrixB, resultDims } = useMemo(() => {
     if (!frames.length) return { matrixA: null, matrixB: null, resultDims: null };
 
-    const computeFrames = frames.filter((f) => f.type === "cell-compute");
+    const currentChainStep = currentFrame?.chainStep ?? 0;
+    const computeFrames = frames.filter(
+      (f) => f.type === "cell-compute" && f.chainStep === currentChainStep
+    );
     if (!computeFrames.length) return { matrixA: null, matrixB: null, resultDims: null };
 
     const aRows = new Map();
@@ -72,17 +75,14 @@ export function MatrixStepper({ cellId }) {
       matrixB: B,
       resultDims: { rows: maxRow + 1, cols: maxCol + 1 },
     };
-  }, [frames]);
+  }, [frames, currentFrame]);
 
-  if (!frames.length) {
-    if (!rawResult && !errorMessage) {
-      return null;
-    }
+  if (!frames.length && !rawResult && !errorMessage) return null;
+
+  if (!frames.length && rawResult) {
     return (
       <div className="flex flex-col items-center justify-center py-6">
-        {errorMessage ? null : rawResult !== null && rawResult !== undefined ? (
-          <StaticResultDisplay result={rawResult} />
-        ) : null}
+        <StaticResultDisplay result={rawResult} cellId={cellId} />
       </div>
     );
   }
@@ -115,11 +115,18 @@ export function MatrixStepper({ cellId }) {
           <KroneckerStepper cellId={cellId} frame={currentFrame} />
         )}
 
+        {currentFrame.type === "gate-column" && (
+          <GateColumnDisplay cellId={cellId} frame={currentFrame} />
+        )}
+
         {currentFrame.type === "complete" && (
           <CompleteFrame
             cellId={cellId}
             resultSoFar={currentFrame.resultSoFar}
             isKronecker={Boolean(currentFrame.matrixA)}
+            isGate={Boolean(currentFrame.gateName)}
+            matrix={currentFrame.matrix}
+            gateName={currentFrame.gateName}
           />
         )}
       </div>
@@ -127,23 +134,43 @@ export function MatrixStepper({ cellId }) {
   );
 }
 
+// ------------------------------------------------------------------
+// Multiplication frame – now uses `chainStep` for layoutId scoping
+// ------------------------------------------------------------------
 function MultiplicationFrame({ cellId, frame, matrixA, matrixB, resultDims }) {
-  const { rowIndex, colIndex, terms, resultSoFar } = frame;
+  const { rowIndex, colIndex, terms, resultSoFar, runningSum, chainStep = 0 } = frame;
+
+  const sumString = terms
+    .map((term) => `${formatShort(term.a)} × ${formatShort(term.b)}`)
+    .join(" + ");
+
+  const resultString = `${formatShort(runningSum)}`;
+
+  // Prefix layoutIds with chainStep to avoid collisions between phases
+  const prefix = `${cellId}-chain${chainStep}`;
 
   return (
     <div className="flex w-full flex-col items-center gap-5">
+      <div className="max-w-md rounded-lg border border-cyan-quantum-200 bg-cyan-quantum-50/60 p-3 text-center">
+        <p className="font-ui text-xs text-cyan-quantum-700">
+          Computing result cell <span className="font-code">[{rowIndex}][{colIndex}]</span>{" "}
+          = row {rowIndex} of A · column {colIndex} of B
+        </p>
+        <p className="mt-1 font-math text-xs text-slate-700">
+          {sumString} = {resultString}
+        </p>
+      </div>
+
       <div className="flex items-center gap-4">
         <MatrixGrid
           matrix={matrixA}
-          getLayoutId={(r, c) => `${cellId}-A-${r}-${c}`}
+          getLayoutId={(r, c) => `${prefix}-A-${r}-${c}`}
           getState={(r) => (r === rowIndex ? "row-highlight" : "idle")}
         />
-
         <span className="font-math text-xl text-slate-400">×</span>
-
         <MatrixGrid
           matrix={matrixB}
-          getLayoutId={(r, c) => `${cellId}-B-${r}-${c}`}
+          getLayoutId={(r, c) => `${prefix}-B-${r}-${c}`}
           getState={(_r, c) => (c === colIndex ? "col-highlight" : "idle")}
         />
       </div>
@@ -152,7 +179,7 @@ function MultiplicationFrame({ cellId, frame, matrixA, matrixB, resultDims }) {
         <div className="flex items-center gap-2">
           {terms.map((term, k) => (
             <motion.div
-              key={`${cellId}-term-${k}`}
+              key={`${prefix}-term-${k}`}
               layout
               initial={{ opacity: 0, y: -10 }}
               animate={{ opacity: 1, y: 0 }}
@@ -160,9 +187,9 @@ function MultiplicationFrame({ cellId, frame, matrixA, matrixB, resultDims }) {
               transition={cascadeTransition(k, 0.08)}
               className="flex items-center gap-1"
             >
-              <MatrixCell value={term.a} layoutId={`${cellId}-term-a-${k}`} variant="term" state="active" />
+              <MatrixCell value={term.a} layoutId={`${prefix}-term-a-${k}`} variant="term" state="active" />
               <span className="font-math text-slate-400">×</span>
-              <MatrixCell value={term.b} layoutId={`${cellId}-term-b-${k}`} variant="term" state="active" />
+              <MatrixCell value={term.b} layoutId={`${prefix}-term-b-${k}`} variant="term" state="active" />
               {k < terms.length - 1 && <span className="font-math ml-1 text-slate-400">+</span>}
             </motion.div>
           ))}
@@ -173,7 +200,7 @@ function MultiplicationFrame({ cellId, frame, matrixA, matrixB, resultDims }) {
 
       <MatrixGrid
         matrix={resultSoFar}
-        getLayoutId={(r, c) => `${cellId}-result-${r}-${c}`}
+        getLayoutId={(r, c) => `${prefix}-result-${r}-${c}`}
         getState={(r, c) =>
           r === rowIndex && c === colIndex
             ? "active"
@@ -186,7 +213,27 @@ function MultiplicationFrame({ cellId, frame, matrixA, matrixB, resultDims }) {
   );
 }
 
-function CompleteFrame({ cellId, resultSoFar, isKronecker }) {
+function CompleteFrame({ cellId, resultSoFar, isKronecker, isGate, matrix, gateName }) {
+  if (isGate && matrix) {
+    return (
+      <motion.div
+        className="flex flex-col items-center gap-2"
+        initial={{ scale: 0.96 }}
+        animate={{ scale: 1 }}
+        transition={PLAYFUL_BOUNCE}
+      >
+        <span className="font-code text-[10px] uppercase tracking-wider text-emerald-600/70">
+          {gateName} · Full Matrix
+        </span>
+        <MatrixGrid
+          matrix={matrix}
+          getLayoutId={(r, c) => `${cellId}-result-${r}-${c}`}
+          getState={() => "settled"}
+        />
+      </motion.div>
+    );
+  }
+
   return (
     <motion.div
       className="flex flex-col items-center gap-2"
@@ -225,72 +272,65 @@ function MatrixGrid({ matrix, getLayoutId, getState }) {
   );
 }
 
-// ============================================================
-// BUG FIX: proper bracketed-matrix LaTeX rendering, replacing
-// the old raw result.toString() call.
-// ============================================================
-
-/** Rounds to 4 decimals, strips trailing zeros. Same logic as MatrixCell. */
-function roundClean(n) {
-  return Math.round(n * 10000) / 10000;
+function formatShort(value) {
+  if (value === null || value === undefined) return "?";
+  if (typeof value === "object" && "re" in value) {
+    const r = round(value.re);
+    const i = round(value.im);
+    if (i === 0) return r;
+    const sign = i < 0 ? "-" : "+";
+    return `${r} ${sign} ${Math.abs(i)}i`;
+  }
+  return round(value);
 }
 
-/** Formats one entry (real or complex) as rectangular a+bi LaTeX text. */
-function formatEntryLatex(value) {
-  if (value === null || value === undefined) return "";
-  if (typeof value === "object" && "re" in value && "im" in value) {
-    const re = roundClean(value.re);
-    const im = roundClean(value.im);
-    if (im === 0) return `${re}`;
-    const sign = im < 0 ? "-" : "+";
-    const imAbs = Math.abs(im);
-    const imStr = imAbs === 1 ? "i" : `${imAbs}i`;
-    return `${re} ${sign} ${imStr}`;
-  }
-  return `${roundClean(value)}`;
+function round(n) {
+  return Math.round(n * 1000) / 1000;
 }
 
-/**
- * Converts a Math.js evaluation result (matrix, vector, or scalar)
- * into a proper KaTeX bmatrix LaTeX string, so results like dagger(Y)
- * or |0><1| render as an actual bracketed matrix instead of raw
- * Math.js toString() text.
- */
-function resultToLatex(result) {
-  // Scalar (plain number or complex number, not wrapped in a matrix)
-  if (typeof result !== "object" || result === null) {
-    return formatEntryLatex(result);
+// --- Static Result Display (unchanged) ---
+function StaticResultDisplay({ result, cellId }) {
+  if (result === null || result === undefined) return null;
+  let matrix = null;
+  try {
+    if (typeof result.toArray === "function") {
+      const arr = result.toArray();
+      matrix = Array.isArray(arr[0]) ? arr : [arr];
+    } else if (Array.isArray(result)) {
+      matrix = Array.isArray(result[0]) ? result : [result];
+    }
+  } catch {
+    matrix = null;
   }
-  if ("re" in result && "im" in result && !result.toArray) {
-    return formatEntryLatex(result);
+  if (matrix) {
+    return (
+      <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-2.5">
+        <MatrixGrid
+          matrix={matrix}
+          getLayoutId={(r, c) => `${cellId}-static-${r}-${c}`}
+          getState={() => "settled"}
+        />
+      </div>
+    );
   }
-
-  // Math.js Matrix or plain array — normalize to a 2D array first.
-  let arr;
-  if (result.toArray) {
-    arr = result.toArray();
-  } else if (Array.isArray(result)) {
-    arr = result;
-  } else {
-    // Unknown shape — fall back to plain toString rather than crash.
-    return result.toString ? result.toString() : String(result);
-  }
-
-  // Ensure 2D (a plain 1D array becomes a single row).
-  const rows2D = Array.isArray(arr[0]) ? arr : [arr];
-
-  const bodyRows = rows2D
-    .map((row) => row.map((v) => formatEntryLatex(v)).join(" & "))
-    .join(" \\\\ ");
-
-  return `\\begin{bmatrix} ${bodyRows} \\end{bmatrix}`;
-}
-
-function StaticResultDisplay({ result }) {
   const latex = resultToLatex(result);
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-4 font-math">
       <InlineMath math={latex} />
     </div>
   );
+}
+
+function resultToLatex(result) {
+  if (typeof result !== "object" || result === null) return `${result}`;
+  if ("re" in result && "im" in result && !result.toArray) {
+    return `${round(result.re)} ${result.im < 0 ? "-" : "+"} ${Math.abs(round(result.im))}i`;
+  }
+  let arr;
+  if (result.toArray) arr = result.toArray();
+  else if (Array.isArray(result)) arr = result;
+  else return result.toString ? result.toString() : String(result);
+  const rows2D = Array.isArray(arr[0]) ? arr : [arr];
+  const body = rows2D.map(row => row.map(v => `${v}`).join(" & ")).join(" \\\\ ");
+  return `\\begin{bmatrix} ${body} \\end{bmatrix}`;
 }

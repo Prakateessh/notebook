@@ -7,11 +7,12 @@
  * has Tailwind v4 installed, which uses a single @import and defines
  * custom theme tokens (fonts, colors) directly in CSS via @theme —
  * tailwind.config.js is no longer used for this at all in v4.
+ *
+ * Google Fonts are now loaded via <link> tags in index.html to avoid
+ * PostCSS @import ordering conflicts.
  */
 
 @import "tailwindcss";
-
-@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 /* --- Theme tokens: v4's replacement for tailwind.config.js's
        theme.extend. Defines font-ui, font-math, font-code utilities,
@@ -130,4 +131,102 @@
 @keyframes quantum-drift-c {
   0%, 100% { transform: translate(0, 0) scale(1); }
   50% { transform: translate(-6%, 5%) scale(1.1); }
+}
+
+/* Glitch text animation */
+.glitch-text {
+  text-shadow: 0 0 10px rgba(0, 230, 255, 0.8), 0 0 20px rgba(0, 163, 184, 0.6);
+  animation: glitch-skew 3s infinite linear alternate-reverse;
+}
+
+@keyframes glitch-skew {
+  0%   { transform: skew(0deg, 0deg); }
+  20%  { transform: skew(2deg, 1deg); }
+  40%  { transform: skew(-1deg, -0.5deg); }
+  60%  { transform: skew(0.5deg, -1deg); }
+  80%  { transform: skew(-2deg, 0.5deg); }
+  100% { transform: skew(0deg, 0deg); }
+}
+
+.shimmer-text {
+  background: linear-gradient(
+    90deg,
+    #ffffff 0%,
+    #ffffff 40%,
+    #00e0ff 50%,
+    #ffffff 60%,
+    #ffffff 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: shimmer 2.5s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+
+.gradient-text-subtle {
+  background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* --- Cinematic hero support: smooth scroll, hidden scrollbar,
+       glowing animated borders for magnetic button + feature cards --- */
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  scrollbar-width: none; /* Firefox */
+}
+body::-webkit-scrollbar {
+  display: none; /* Chrome/Safari — scroll functionality unaffected */
+}
+
+/* Animated glow border — rotating conic gradient behind the element,
+   masked to only show as a thin ring, for a "premium living border" feel. */
+.glow-border-btn,
+.glow-border-card {
+  position: relative;
+}
+
+.glow-border-btn::before,
+.glow-border-card::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0%,
+    rgba(196, 181, 253, 0.9) 15%,
+    transparent 30%
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: glow-rotate 4s linear infinite;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+
+.glow-border-btn:hover::before,
+.glow-border-card:hover::before {
+  opacity: 1;
+}
+
+@keyframes glow-rotate {
+  to {
+    transform: rotate(360deg);
+  }
 }

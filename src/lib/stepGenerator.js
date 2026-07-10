@@ -2,13 +2,13 @@
 //
 // Visual Stepper Frame Generator
 // -----------------------------------------------------------------------
-// Converts a matrix operation (multiplication or Kronecker product) into
-// an ARRAY OF FRAMES that the UI can step through with Framer Motion.
+// Converts a matrix operation (multiplication, Kronecker product, or
+// a gate-only expression) into an ARRAY OF FRAMES that the UI can step
+// through with Framer Motion.
 //
 // Each frame is a plain data object — no rendering logic lives here.
-// MatrixStepper.jsx / KroneckerStepper.jsx consume these frames and
-// animate transitions between them using <motion.div layout> +
-// <AnimatePresence>.
+// MatrixStepper.jsx / KroneckerStepper.jsx / GateStepper.jsx consume
+// these frames and animate transitions between them.
 //
 // Frame shape (matrix multiplication), one frame PER OUTPUT CELL:
 // {
@@ -35,8 +35,17 @@
 //   matrixB: number[][],       // NEW: full source matrix B, unchanged across all frames
 // }
 //
-// A final frame of type "complete" holds the fully computed matrix
-// (also carries matrixA/matrixB for the Kronecker case, for consistency).
+// Frame shape (gate explanation), one frame PER COLUMN:
+// {
+//   type: "gate-column",
+//   gateName: string,          // e.g., "CNOT", "H"
+//   columnIndex: number,       // 0‑based column index
+//   inputBasis: string,        // "|00⟩", "|0⟩", etc.
+//   columnVector: number[],    // the column as a flat array
+//   matrix: number[][],        // full gate matrix (2D array)
+//   numQubits: number          // number of qubits this gate acts on
+// }
+// A final frame of type "complete" holds the full matrix for the gate.
 //
 // Design notes:
 // - We do NOT mutate the caller's matrices. Everything is read via
@@ -204,6 +213,70 @@ export function generateKroneckerSteps(A, B, ops) {
     resultSoFar,
     matrixA: A,
     matrixB: B,
+  });
+
+  return frames;
+}
+
+// ----------------------------------------------------------------------
+// NEW: Gate Explanation Steps
+// ----------------------------------------------------------------------
+
+/**
+ * Generates basis state labels like |0⟩, |1⟩ or |00⟩, |01⟩, |10⟩, |11⟩
+ * for a given number of qubits.
+ * @param {number} numQubits
+ * @returns {string[]} array of basis labels
+ */
+function generateBasisLabels(numQubits) {
+  const count = 1 << numQubits; // 2^numQubits
+  return Array.from({ length: count }, (_, i) =>
+    `|${i.toString(2).padStart(numQubits, "0")}⟩`
+  );
+}
+
+/**
+ * Generates column‑by‑column frames for a quantum gate.
+ * Each frame highlights one column of the gate matrix, showing the
+ * input basis state and the resulting output state (the column itself).
+ *
+ * @param {Array<Array<number>>} gateMatrix - n x n matrix (n = 2^k)
+ * @param {string} gateName - e.g. "CNOT", "H"
+ * @returns {Array<object>} frames - ordered array, last frame type "complete"
+ */
+export function generateGateExplanationSteps(gateMatrix, gateName) {
+  const n = gateMatrix.length;
+  const numQubits = Math.log2(n);
+  if (!Number.isInteger(numQubits)) {
+    throw new Error(
+      `Gate matrix size ${n} is not a power of 2; cannot generate basis labels.`
+    );
+  }
+
+  const basisLabels = generateBasisLabels(numQubits);
+  const frames = [];
+
+  for (let j = 0; j < n; j++) {
+    // Extract column j (output state for input basis state |j⟩)
+    const columnVector = gateMatrix.map(row => row[j]);
+
+    frames.push({
+      type: "gate-column",
+      gateName,
+      columnIndex: j,
+      inputBasis: basisLabels[j],
+      columnVector,
+      matrix: gateMatrix,   // reference to the full matrix (never mutates)
+      numQubits,
+    });
+  }
+
+  // Final complete frame with the full matrix
+  frames.push({
+    type: "complete",
+    gateName,
+    matrix: gateMatrix,
+    numQubits,
   });
 
   return frames;

@@ -1,55 +1,182 @@
 // src/components/visualizer/VisualizerPanel.jsx
 //
-// Visualizer Panel — The Right-Column "Video Player"
+// Visualizer Panel — The Right‑Column "Video Player"
 // -----------------------------------------------------------------------
-// This is the sticky right column rendered by SplitShell.jsx. It reads
-// `activeCellId` from the store (set whenever a notebook cell's editor
-// gains focus — see CodeEditor.jsx's onFocus hook, wired in a later
-// file) and displays THAT cell's MatrixStepper + PlaybackControls +
-// ProbabilityPanel, all in one generously-spaced, premium composite —
-// replacing the old per-cell inline versions that made cells feel
-// cramped.
+// KEYBOARD SHORTCUTS (focus‑based):
+//   Click anywhere inside the visualiser panel to give it focus.
+//   Then use:
+//     ←  ArrowLeft   → previous frame
+//     →  ArrowRight  → next frame
+//     Space          → toggle play/pause
+//   The panel shows a subtle glow when it’s focused and ready for input.
 //
-// EMPTY STATE: per your spec, when there's nothing to show (no cell
-// has been evaluated yet, or the active cell's input is empty), we
-// render a subtle KaTeX-notation watermark pattern — faint |ψ⟩, |0⟩,
-// ⟨ψ|, and similar quantum bra-ket glyphs scattered across the empty
-// canvas — rather than a blank box or a plain "nothing here" message.
-// This keeps the panel feeling alive and on-theme even before the
-// user has typed anything.
-//
-// Layout: header (cell indicator) at top, MatrixStepper takes the
-// dominant vertical space (this IS the "video" — it should feel like
-// the main event, not squeezed), Playback + Probability sit together
-// in a footer strip, similar spacing logic to a real video player's
-// scrubber-plus-metadata bar beneath the video itself.
+//   Shortcuts are disabled automatically when you focus a text input
+//   (code editor) or another interactive element.
 
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuantumStore } from "../../store/useQuantumStore";
 import { MatrixStepper } from "./MatrixStepper";
 import { PlaybackControls } from "../controls/PlaybackControls";
 import { ProbabilityPanel } from "../controls/ProbabilityPanel";
+import { BlochSphere } from "../three/BlochSphere";
 import { GENTLE_SETTLE } from "../../lib/motionPresets";
-
-const WATERMARK_GLYPHS = ["|ψ⟩", "⟨0|", "|1⟩", "⟨ψ|", "|+⟩", "⟨1|", "|00⟩", "H"];
 
 export function VisualizerPanel() {
   const activeCellId = useQuantumStore((s) => s.activeCellId);
   const cellOrder = useQuantumStore((s) => s.cellOrder);
-  const hasResult = useQuantumStore(
-    (s) => s.cells[activeCellId]?.evaluation.result !== null &&
-      s.cells[activeCellId]?.evaluation.result !== undefined
+  const cellResult = useQuantumStore(
+    (s) => s.cells[activeCellId]?.evaluation.result
   );
-  const hasError = useQuantumStore((s) => !!s.cells[activeCellId]?.evaluation.error);
-  const hasFrames = useQuantumStore(
-    (s) => (s.cells[activeCellId]?.stepper.frames.length ?? 0) > 0
+  const hasResult =
+    cellResult !== null && cellResult !== undefined;
+  const hasError = useQuantumStore(
+    (s) => !!s.cells[activeCellId]?.evaluation.error
   );
 
   const activeCellNumber = cellOrder.indexOf(activeCellId) + 1;
   const showEmptyState = !hasResult && !hasError;
 
+  const isStateVector = hasResult && isColumnVector(cellResult);
+
+  const blochAmplitudes = useMemo(() => {
+    if (!isStateVector || !cellResult) return null;
+    try {
+      let arr;
+      if (typeof cellResult.toArray === "function") {
+        const raw = cellResult.toArray();
+        arr = Array.isArray(raw[0]) ? raw.map(row => row[0]) : raw;
+      } else if (Array.isArray(cellResult)) {
+        arr = Array.isArray(cellResult[0]) ? cellResult.map(row => row[0]) : cellResult;
+      } else {
+        return null;
+      }
+      if (arr.length === 2) {
+        return [
+          typeof arr[0] === 'object' ? arr[0] : { re: arr[0], im: 0 },
+          typeof arr[1] === 'object' ? arr[1] : { re: arr[1], im: 0 }
+        ];
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }, [isStateVector, cellResult]);
+
+  const handleMeasure = useCallback(() => {
+    if (!activeCellId || !isStateVector) return;
+
+    let amplitudes;
+    try {
+      if (typeof cellResult.toArray === "function") {
+        const arr = cellResult.toArray();
+        if (Array.isArray(arr) && arr.length > 0 && Array.isArray(arr[0]) && arr[0].length === 1) {
+          amplitudes = arr.map(row => row[0]);
+        } else if (Array.isArray(arr) && arr.length > 0 && !Array.isArray(arr[0])) {
+          amplitudes = arr;
+        } else {
+          return;
+        }
+      } else {
+        return;
+      }
+    } catch {
+      return;
+    }
+
+    const math = useQuantumStore.getState().math;
+    if (!math) return;
+
+    let probabilities;
+    try {
+      probabilities = math.prob(amplitudes);
+    } catch {
+      probabilities = amplitudes.map(a => {
+        const abs = typeof a === 'object' && a.re !== undefined ? Math.hypot(a.re, a.im) : Math.abs(a);
+        return abs * abs;
+      });
+    }
+
+    const r = Math.random();
+    let cum = 0;
+    let chosenIndex = 0;
+    for (let i = 0; i < probabilities.length; i++) {
+      cum += probabilities[i];
+      if (r <= cum) {
+        chosenIndex = i;
+        break;
+      }
+    }
+
+    const newAmplitudes = amplitudes.map((_, i) => (i === chosenIndex ? 1 : 0));
+
+    let newResult;
+    try {
+      newResult = math.matrix(newAmplitudes.map(v => [v]));
+    } catch {
+      newResult = newAmplitudes;
+    }
+
+    useQuantumStore.setState(state => ({
+      cells: {
+        ...state.cells,
+        [activeCellId]: {
+          ...state.cells[activeCellId],
+          evaluation: {
+            ...state.cells[activeCellId].evaluation,
+            result: newResult,
+          },
+          stepper: { frames: [], currentFrameIndex: 0, isPlaying: false },
+        },
+      },
+    }));
+  }, [activeCellId, isStateVector, cellResult]);
+
+  // --- Focusable container for keyboard shortcuts ---
+  const panelRef = useRef(null);
+
+  useEffect(() => {
+    const el = panelRef.current;
+    if (!el) return;
+
+    const handleKeyDown = (e) => {
+      // Only act when the panel itself or a child is focused,
+      // and no text input is active inside it.
+      const active = document.activeElement;
+      if (
+        active?.tagName === "INPUT" ||
+        active?.tagName === "TEXTAREA" ||
+        active?.isContentEditable
+      ) return;
+
+      if (!activeCellId) return;
+
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        useQuantumStore.getState().prevFrame(activeCellId);
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        useQuantumStore.getState().nextFrame(activeCellId);
+      } else if (e.key === " ") {
+        e.preventDefault();
+        useQuantumStore.getState().togglePlayback(activeCellId);
+      }
+    };
+
+    el.addEventListener("keydown", handleKeyDown);
+    return () => el.removeEventListener("keydown", handleKeyDown);
+  }, [activeCellId]);
+
   return (
-    <div className="flex h-full flex-col bg-white/50 backdrop-blur-glass">
+    <div
+      ref={panelRef}
+      tabIndex={0}   // makes the div focusable via click
+      className={`
+        flex h-full flex-col bg-white/50 backdrop-blur-glass
+        outline-none transition-shadow duration-200
+        focus:ring-2 focus:ring-cyan-quantum-400/60 focus:ring-inset
+      `}
+    >
       {/* --- Header --- */}
       <div className="flex items-center justify-between border-b border-slate-200/70 px-6 py-4">
         <h2 className="font-ui text-sm font-medium tracking-wide text-slate-700">
@@ -60,7 +187,7 @@ export function VisualizerPanel() {
         </span>
       </div>
 
-      {/* --- Main stage: MatrixStepper or empty-state watermark --- */}
+      {/* --- Main stage --- */}
       <div className="relative flex flex-1 flex-col items-center justify-center overflow-auto px-6 py-4">
         <AnimatePresence mode="wait">
           {showEmptyState ? (
@@ -97,23 +224,60 @@ export function VisualizerPanel() {
         </AnimatePresence>
       </div>
 
-      {/* --- Footer strip: playback + probability, side by side --- */}
+      {/* --- Bloch sphere --- */}
+      {blochAmplitudes && (
+        <div className="flex justify-center border-t border-slate-200/70 px-6 py-4">
+          <BlochSphere state={blochAmplitudes} size={200} showLabels={false} />
+        </div>
+      )}
+
+      {/* --- Footer --- */}
       {activeCellId && (
-        <div className="grid grid-cols-2 gap-6 border-t border-slate-200/70 px-6 py-4">
-          <PlaybackControls cellId={activeCellId} />
-          <ProbabilityPanel cellId={activeCellId} />
+        <div className="border-t border-slate-200/70 px-6 py-4">
+          <div className="grid grid-cols-2 gap-6 mb-4">
+            <PlaybackControls cellId={activeCellId} />
+            <ProbabilityPanel cellId={activeCellId} />
+          </div>
+
+          {isStateVector && (
+            <motion.button
+              onClick={handleMeasure}
+              whileTap={{ scale: 0.95 }}
+              className="
+                w-full rounded-xl border border-purple-quantum-400/60
+                bg-purple-quantum-50 py-2.5 font-ui text-xs font-medium
+                text-purple-quantum-700 transition-colors duration-150
+                hover:bg-purple-quantum-100 hover:border-purple-quantum-500
+                active:bg-purple-quantum-200
+              "
+            >
+              Measure
+            </motion.button>
+          )}
         </div>
       )}
     </div>
   );
 }
 
-/**
- * Faint, scattered bra-ket notation pattern for the empty state.
- * Positioned with fixed percentage coordinates (not randomly generated
- * per render, so the pattern doesn't jump around on re-render) and
- * varied rotation/size for organic, non-grid-like scatter.
- */
+function isColumnVector(result) {
+  if (!result) return false;
+  try {
+    let arr;
+    if (typeof result.toArray === "function") {
+      arr = result.toArray();
+    } else if (Array.isArray(result)) {
+      arr = result;
+    } else {
+      return false;
+    }
+    if (!Array.isArray(arr) || arr.length === 0) return false;
+    return arr.every(row => Array.isArray(row) && row.length === 1);
+  } catch {
+    return false;
+  }
+}
+
 function WatermarkPattern() {
   const placements = [
     { glyph: "|ψ⟩", top: "12%", left: "15%", size: "3rem", rotate: -8 },
