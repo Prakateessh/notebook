@@ -1,32 +1,25 @@
 // src/components/visualizer/MatrixCell.jsx
 //
-// Individual Animated Matrix Cell — QUANTUM LIGHT GLASSMORPHISM
+// Individual Animated Matrix Cell
 // -----------------------------------------------------------------------
-// MODIFIED FOR LIGHT THEME: per the design doc, all matrix/vector KaTeX
-// output renders in Source Serif 4 (font-math token), NOT the UI font —
-// this is the doc's explicit reasoning for using a serif here: visually
-// distinguishing complex quantum variables (e.g. v vs ν) is easier with
-// serif letterforms than with a neutral sans-serif UI font.
+// CHANGE FROM PREVIOUS VERSION: the spring transition is now imported
+// from motionPresets.js (MATRIX_MORPH) instead of being hardcoded
+// inline. This is the last remaining component with an ad-hoc spring
+// object — bringing it in line with MatrixStepper.jsx and
+// KroneckerStepper.jsx, so every matrix cell across the ENTIRE app
+// (multiplication grids, Kronecker grids, the flying clone, the intro
+// demo) now morphs with the exact same tuned physics. This consistency
+// is what makes the whole app's motion feel like one designed system
+// rather than a collection of individually-tuned animations.
 //
-// State colors flipped from dark-glow treatments (cyan/fuchsia/amber
-// glows on a near-black background) to light-appropriate washes: soft
-// tinted backgrounds with a colored border, no heavy box-shadow glow
-// (glow effects that look premium on dark backgrounds tend to look like
-// muddy smudges on light backgrounds — a crisper border-based highlight
-// reads better here).
-//
-// Per the doc's accent system: Cyan (cyan-quantum) for the PRIMARY
-// highlight (row highlight, matches "highlighting the current row/column"
-// spec), Purple (purple-quantum) for the SECONDARY accent (column
-// highlight, since the doc calls purple "secondary... variable grouping").
-//
-// Everything else (layoutId prop passthrough, complex-number formatting,
-// roundClean logic) is UNCHANGED from the original file — pure logic,
-// no theme dependency.
+// Everything else — KaTeX rendering, complex number formatting in
+// rectangular a+bi form, state-driven color styling, the "cell" vs
+// "term" size variants — is UNCHANGED from the previous version.
 
 import { motion } from "framer-motion";
 import { InlineMath } from "react-katex";
 import "katex/dist/katex.min.css";
+import { MATRIX_MORPH } from "../../lib/motionPresets";
 
 /**
  * Formats a numeric value (real or math.js Complex) into a LaTeX string
@@ -94,12 +87,7 @@ export function MatrixCell({
     <motion.div
       layoutId={layoutId}
       layout
-      transition={{
-        type: "spring",
-        stiffness: 350,
-        damping: 28,
-        mass: 0.8,
-      }}
+      transition={MATRIX_MORPH}
       initial={{ opacity: 0, scale: 0.85 }}
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.85 }}

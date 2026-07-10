@@ -1,20 +1,28 @@
 // src/components/visualizer/MatrixStepper.jsx
 //
-// Visual Stepper Orchestration Engine — QUANTUM LIGHT GLASSMORPHISM
+// Visual Stepper Orchestration Engine — REWRITE
 // -----------------------------------------------------------------------
-// MODIFIED FOR LIGHT THEME: matrix grid containers switched from
-// bg-slate-950/40 (dark well) to bg-slate-50/60 (light recessed panel),
-// borders from slate-800/40 to slate-200. Text labels flipped from
-// light-on-dark to dark-on-light. All KaTeX/text rendering that isn't
-// inside a MatrixCell now uses font-math (Source Serif 4) for the
-// static-result fallback, and font-code (JetBrains Mono) for the
-// technical step-counter labels.
+// CHANGES FROM PREVIOUS VERSION:
 //
-// EVERYTHING ELSE — the cellId-scoped layoutId prefixing (critical fix
-// from the notebook conversion), frame choreography logic, matrix
-// reconstruction from frames, fallback rendering when frames are
-// empty — is COMPLETELY UNCHANGED from the previous version. This file
-// is theme/color changes ONLY, zero logic changes.
+//   1. Kronecker rendering is now DELEGATED to KroneckerStepper.jsx
+//      entirely (the old inline KroneckerFrame function — which you
+//      correctly called "trash" — is deleted from this file). This
+//      component now just detects frame.type === "block-compute" and
+//      hands the whole frame off to <KroneckerStepper>, which owns
+//      the full fly-and-duplicate animation independently.
+//
+//   2. Matrix multiplication frames now use the shared motionPresets
+//      (MATRIX_MORPH, PLAYFUL_BOUNCE) instead of ad-hoc inline spring
+//      objects, so multiplication and Kronecker animations feel like
+//      they belong to the same designed motion system.
+//
+//   3. Still takes a `cellId` prop and scopes every layoutId with it
+//      (unchanged from the notebook-cell rewrite — still critical for
+//      preventing cross-cell animation collisions).
+//
+// Frame choreography logic, matrix A/B reconstruction from
+// cell-compute frames, and the empty-state fallback are otherwise
+// UNCHANGED in behavior from the previous version.
 
 import { useEffect, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -22,6 +30,8 @@ import { InlineMath } from "react-katex";
 import "katex/dist/katex.min.css";
 import { useQuantumStore } from "../../store/useQuantumStore";
 import { MatrixCell } from "./MatrixCell";
+import { KroneckerStepper } from "./KroneckerStepper";
+import { MATRIX_MORPH, PLAYFUL_BOUNCE, cascadeTransition } from "../../lib/motionPresets";
 
 export function MatrixStepper({ cellId }) {
   const frames = useQuantumStore((s) => s.cells[cellId]?.stepper.frames ?? []);
@@ -42,12 +52,15 @@ export function MatrixStepper({ cellId }) {
 
     const timer = setTimeout(() => {
       nextFrame(cellId);
-    }, 900);
+    }, 1100); // slowed slightly from 900ms — matches the "cinematic,
+    // slow, watchable" pacing goal from motionPresets.DURATIONS.cinematic
 
     return () => clearTimeout(timer);
   }, [isPlaying, currentFrameIndex, frames.length, nextFrame, cellId]);
 
-  // --- Reconstruct full A and B matrices from the frame set (unchanged logic) ---
+  // --- Reconstruct full A and B matrices from cell-compute frames
+  //     (multiplication only — Kronecker frames now carry matrixA/
+  //     matrixB directly, no reconstruction needed for that case). ---
   const { matrixA, matrixB, resultDims } = useMemo(() => {
     if (!frames.length) return { matrixA: null, matrixB: null, resultDims: null };
 
@@ -119,12 +132,20 @@ export function MatrixStepper({ cellId }) {
           />
         )}
 
+        {/* --- Kronecker frames fully delegated to KroneckerStepper --- */}
         {currentFrame.type === "block-compute" && (
-          <KroneckerFrame cellId={cellId} frame={currentFrame} />
+          <KroneckerStepper cellId={cellId} frame={currentFrame} />
         )}
 
         {currentFrame.type === "complete" && (
-          <CompleteFrame cellId={cellId} resultSoFar={currentFrame.resultSoFar} />
+          <CompleteFrame
+            cellId={cellId}
+            resultSoFar={currentFrame.resultSoFar}
+            // Kronecker's "complete" frame carries matrixA/matrixB —
+            // multiplication's does not. Passing both through so
+            // CompleteFrame can decide which visual treatment fits.
+            isKronecker={Boolean(currentFrame.matrixA)}
+          />
         )}
       </div>
     </div>
@@ -161,7 +182,7 @@ function MultiplicationFrame({ cellId, frame, matrixA, matrixB, resultDims }) {
               initial={{ opacity: 0, y: -10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 10 }}
-              transition={{ type: "spring", stiffness: 300, damping: 24 }}
+              transition={cascadeTransition(k, 0.08)}
               className="flex items-center gap-1"
             >
               <MatrixCell value={term.a} layoutId={`${cellId}-term-a-${k}`} variant="term" state="active" />
@@ -190,44 +211,23 @@ function MultiplicationFrame({ cellId, frame, matrixA, matrixB, resultDims }) {
   );
 }
 
-function KroneckerFrame({ cellId, frame }) {
-  const { scalar, block, resultSoFar } = frame;
-
+function CompleteFrame({ cellId, resultSoFar, isKronecker }) {
   return (
-    <div className="flex w-full flex-col items-center gap-5">
-      <div className="flex items-center gap-3">
-        <MatrixCell value={scalar} layoutId={`${cellId}-kron-scalar`} state="active" />
-        <span className="font-math text-xl text-slate-400">⊗ B →</span>
-        <MatrixGrid
-          matrix={block}
-          getLayoutId={(r, c) => `${cellId}-block-${r}-${c}`}
-          getState={() => "active"}
-        />
-      </div>
-
-      <span className="text-slate-400">↓</span>
-
-      <MatrixGrid
-        matrix={resultSoFar}
-        getLayoutId={(r, c) => `${cellId}-result-${r}-${c}`}
-        getState={(r, c) => (resultSoFar[r][c] !== null ? "settled" : "idle")}
-      />
-    </div>
-  );
-}
-
-function CompleteFrame({ cellId, resultSoFar }) {
-  return (
-    <div className="flex flex-col items-center gap-2">
+    <motion.div
+      className="flex flex-col items-center gap-2"
+      initial={{ scale: 0.96 }}
+      animate={{ scale: 1 }}
+      transition={PLAYFUL_BOUNCE}
+    >
       <span className="font-code text-[10px] uppercase tracking-wider text-emerald-600/70">
-        Complete
+        Complete{isKronecker ? " · Kronecker Product" : ""}
       </span>
       <MatrixGrid
         matrix={resultSoFar}
         getLayoutId={(r, c) => `${cellId}-result-${r}-${c}`}
         getState={() => "settled"}
       />
-    </div>
+    </motion.div>
   );
 }
 

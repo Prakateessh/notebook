@@ -6,8 +6,9 @@
 // an ARRAY OF FRAMES that the UI can step through with Framer Motion.
 //
 // Each frame is a plain data object — no rendering logic lives here.
-// MatrixStepper.jsx will consume these frames and animate transitions
-// between them using <motion.div layout> + <AnimatePresence>.
+// MatrixStepper.jsx / KroneckerStepper.jsx consume these frames and
+// animate transitions between them using <motion.div layout> +
+// <AnimatePresence>.
 //
 // Frame shape (matrix multiplication), one frame PER OUTPUT CELL:
 // {
@@ -21,7 +22,21 @@
 //   resultSoFar: (number|null)[][],  // partial result matrix, null = not yet computed
 // }
 //
-// A final frame of type "complete" holds the fully computed matrix.
+// Frame shape (Kronecker product), one frame PER OUTPUT BLOCK:
+// {
+//   type: "block-compute",
+//   aRowIndex: number,
+//   aColIndex: number,
+//   scalar: number,
+//   block: number[][],
+//   blockOffset: { row: number, col: number },
+//   resultSoFar: (number|null)[][],
+//   matrixA: number[][],       // NEW: full source matrix A, unchanged across all frames
+//   matrixB: number[][],       // NEW: full source matrix B, unchanged across all frames
+// }
+//
+// A final frame of type "complete" holds the fully computed matrix
+// (also carries matrixA/matrixB for the Kronecker case, for consistency).
 //
 // Design notes:
 // - We do NOT mutate the caller's matrices. Everything is read via
@@ -33,6 +48,11 @@
 //   plain nested arrays and a `multiply`/`add` function pair, so it stays
 //   decoupled and testable. The caller passes in math.js's multiply/add
 //   (or plain JS operators for the simple real-number case).
+// - matrixA/matrixB on Kronecker frames are REFERENCES, not clones — A
+//   and B never mutate during the sweep, so no defensive copying is
+//   needed there (unlike resultSoFar, which genuinely changes frame to
+//   frame and DOES need cloning for Framer Motion's layout system to
+//   detect changes correctly via reference inequality).
 
 /**
  * Generates cell-by-cell frames for matrix multiplication A * B.
@@ -167,6 +187,14 @@ export function generateKroneckerSteps(A, B, ops) {
         block,
         blockOffset: { row: rowOffset, col: colOffset },
         resultSoFar: snapshot,
+        // Full source matrices carried on every frame so KroneckerStepper.jsx
+        // can render persistent A/B grids alongside the current block,
+        // rather than only having access to this single block's data.
+        // These are references, not clones — A and B never mutate during
+        // the sweep, so no defensive copying is needed here (unlike
+        // resultSoFar, which genuinely changes frame to frame).
+        matrixA: A,
+        matrixB: B,
       });
     }
   }
@@ -174,6 +202,8 @@ export function generateKroneckerSteps(A, B, ops) {
   frames.push({
     type: "complete",
     resultSoFar,
+    matrixA: A,
+    matrixB: B,
   });
 
   return frames;

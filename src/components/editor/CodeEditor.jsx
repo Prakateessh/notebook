@@ -1,41 +1,38 @@
 // src/components/editor/CodeEditor.jsx
 //
-// Code Editor Compartment — QUANTUM LIGHT GLASSMORPHISM + LINE NUMBERS
+// Code Editor Compartment — SPLIT-VIEW POLISH PASS
 // -----------------------------------------------------------------------
-// This file gains THREE new features from the design doc, on top of the
-// light-theme conversion:
+// FOCUS-BUBBLING CONFIRMATION: this component intentionally does NOT
+// attach its own onFocus handler to the <textarea> that stops or
+// redirects focus events. React's synthetic focus event bubbles up
+// through the component tree by default, so when this textarea
+// receives focus, Cell.jsx's wrapping onFocus={() => setActiveCell(cellId)}
+// fires automatically — no explicit wiring needed in THIS file for
+// that to work. Verified this stays true after the polish pass below;
+// nothing here calls stopPropagation or preventDefault on focus.
 //
-//   1. LINE NUMBERS — a gutter column showing 1, 2, 3... synced to the
-//      textarea's line count. Implemented as a separate <div> of numbers
-//      that scrolls in lockstep with the textarea (via a shared scroll
-//      handler), since a single <textarea> can't natively render its
-//      own gutter.
+// POLISH CHANGES in this pass:
+//   - Slightly more generous padding (p-3 -> p-3.5) and line-height
+//     (leading-6 -> leading-7) — the previous version felt a little
+//     tight now that cells have more visual breathing room overall.
+//   - Focus ring color upgraded from a generic cyan to the app's
+//     actual cyan-quantum-400 token, so focus states feel consistent
+//     with the rest of the light theme's accent system.
+//   - Placeholder text updated to reflect a couple more example
+//     operations (previously only suggested H * |0>), giving new
+//     users a wider hint at what's possible without needing to read
+//     documentation first — small but genuinely helps the "student
+//     friendly" goal.
 //
-//   2. RED SQUIGGLY UNDERLINE on error — HONEST LIMITATION UP FRONT:
-//      the doc describes "the offending code gets a subtle red squiggly
-//      underline," implying per-token/per-span error highlighting. We do
-//      NOT have a real parser producing error position/span information
-//      — math.js's error messages are strings, not structured
-//      {line, column, length} objects. Building true per-character
-//      squiggly-underline-at-the-exact-error-location would require
-//      writing our own expression parser or patching math.js's internals,
-//      which is a much bigger undertaking than this file. What we DO
-//      implement: when there's an error, the ENTIRE textarea gets a
-//      wavy red underline treatment via a CSS text-decoration trick,
-//      signaling "something in here is wrong" without pretending to
-//      pinpoint the exact character. Flagging this clearly rather than
-//      silently under-delivering on the spec.
-//
-//   3. ERROR TOAST — a frosted-glass panel that slides in from the top
-//      via Framer Motion when evaluation fails, replacing the old plain
-//      inline red box from the dark version.
-//
-// BUG FIX (still preserved from earlier): placeholder text lives in the
-// HTML placeholder attribute only, never evaluated as real input.
+// Everything else — line number gutter, auto-grow height, debounced
+// evaluation, Shift+Enter immediate eval, the squiggly-underline error
+// state, the frosted error toast — is UNCHANGED in behavior from the
+// previous version.
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuantumStore } from "../../store/useQuantumStore";
+import { GENTLE_SETTLE } from "../../lib/motionPresets";
 
 export function CodeEditor({ cellId }) {
   const scheduleEvaluation = useQuantumStore((s) => s.scheduleEvaluation);
@@ -102,8 +99,8 @@ export function CodeEditor({ cellId }) {
           aria-hidden="true"
           className="
             select-none overflow-hidden border-r border-slate-200/70
-            bg-slate-50/60 px-2 py-3 text-right
-            font-code text-sm leading-6 text-slate-400
+            bg-slate-50/60 px-2 py-3.5 text-right
+            font-code text-sm leading-7 text-slate-400
           "
           style={{ minWidth: "2.5rem" }}
         >
@@ -122,13 +119,13 @@ export function CodeEditor({ cellId }) {
           spellCheck={false}
           rows={1}
           className={`
-            w-full resize-none overflow-hidden bg-transparent px-3 py-3
-            font-code text-sm leading-6 text-slate-800
+            w-full resize-none overflow-hidden bg-transparent px-3.5 py-3.5
+            font-code text-sm leading-7 text-slate-800
             placeholder:text-slate-400
-            focus:outline-none
+            focus:outline-none focus:ring-1 focus:ring-cyan-quantum-400/40
             ${hasError ? "quantum-error-squiggly" : ""}
           `}
-          placeholder="H * |0>   (Shift+Enter to run)"
+          placeholder="H * |0⟩   ·   kron(X, Y)   ·   Shift+Enter to run"
         />
       </div>
 
@@ -139,7 +136,7 @@ export function CodeEditor({ cellId }) {
             initial={{ opacity: 0, y: -8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -8 }}
-            transition={{ type: "spring", stiffness: 400, damping: 30 }}
+            transition={GENTLE_SETTLE}
             className="
               mt-2 rounded-lg border border-red-200 bg-white/80
               px-3 py-2 backdrop-blur-glass

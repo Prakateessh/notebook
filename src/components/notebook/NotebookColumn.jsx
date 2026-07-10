@@ -1,34 +1,48 @@
-// src/components/notebook/NotebookShell.jsx
+// src/components/notebook/NotebookColumn.jsx
 //
-// Notebook Shell — Scrollable Cell List — QUANTUM LIGHT GLASSMORPHISM
+// Notebook Column — Left Column Wrapper (REPLACES NotebookShell.jsx)
 // -----------------------------------------------------------------------
-// MODIFIED FOR LIGHT THEME: background switched from bg-slate-950 (dark)
-// to the doc's specified slate-50-equivalent canvas (#faf8ff, set
-// globally in index.css on the <html> element — this component no longer
-// needs to set its own background color, it just needs to NOT fight it
-// with a conflicting bg- class).
+// This is the left-hand scrollable column rendered inside SplitShell.jsx.
+// Structurally almost identical to the old NotebookShell.jsx, but:
 //
-// Text colors flipped from light-on-dark (text-slate-400/600) to
-// dark-on-light (text-slate-600/700) for readable contrast against the
-// new light canvas.
+//   1. No longer sets its own bg-slate-950/light-canvas background —
+//      AmbientBackground.jsx now owns the app's global background,
+//      and this column sits transparently on top of it (so the
+//      gradient mesh/grain is visible behind the notebook column too,
+//      not just behind the visualizer panel).
+//   2. No longer assumes it owns the full viewport height itself —
+//      SplitShell.jsx's parent div handles the height/scroll region;
+//      this component just needs to render its content normally.
+//   3. Renamed from NotebookShell -> NotebookColumn to reflect its new
+//      role as ONE column of a two-column layout, not the entire app shell.
 //
-// Structure, animation logic (AnimatePresence, addCell), and the
-// cellOrder mapping are UNCHANGED from the dark version — only colors
-// and font classes are touched in this file.
+// You can safely delete the old src/components/notebook/NotebookShell.jsx
+// file now — nothing imports it anymore once App.jsx is updated (final
+// file in this pass).
 
 import { AnimatePresence, motion } from "framer-motion";
 import { useQuantumStore } from "../../store/useQuantumStore";
 import { Cell } from "./Cell";
+import { GENTLE_SETTLE } from "../../lib/motionPresets";
 
-export function NotebookShell() {
+export function NotebookColumn() {
   const cellOrder = useQuantumStore((s) => s.cellOrder);
   const addCell = useQuantumStore((s) => s.addCell);
+  const setActiveCell = useQuantumStore((s) => s.setActiveCell);
 
   const canDelete = cellOrder.length > 1;
 
+  const handleAddCell = () => {
+    const newId = addCell();
+    // Immediately focus the visualizer panel on the freshly created
+    // cell, so the "video player" doesn't keep showing a now-scrolled-
+    // away previous cell while the user starts typing in the new one.
+    setActiveCell(newId);
+  };
+
   return (
-    <div className="min-h-screen w-full">
-      <div className="mx-auto max-w-4xl px-4 py-8 md:px-6">
+    <div className="min-h-full w-full px-4 py-8 md:px-6 lg:px-8">
+      <div className="mx-auto max-w-2xl">
         {/* --- Notebook title/header --- */}
         <div className="mb-6 flex items-center justify-between">
           <h1 className="font-ui text-sm font-medium tracking-wide text-slate-700">
@@ -55,8 +69,9 @@ export function NotebookShell() {
 
         {/* --- Add Cell affordance --- */}
         <motion.button
-          onClick={addCell}
+          onClick={handleAddCell}
           whileTap={{ scale: 0.98 }}
+          transition={GENTLE_SETTLE}
           className="
             mt-4 flex w-full items-center justify-center gap-2 rounded-xl
             border border-dashed border-slate-300 bg-white/40 py-3

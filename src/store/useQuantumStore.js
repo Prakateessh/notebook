@@ -1,29 +1,27 @@
 // src/store/useQuantumStore.js
 //
-// Central Zustand store for the Quantum Math Scratchpad — NOTEBOOK EDITION.
+// Central Zustand store for the Quantum Math Scratchpad — SPLIT-VIEW EDITION.
 // -----------------------------------------------------------------------
-// REWRITE NOTE: previously this store held ONE editor/evaluation/stepper
-// slice for the whole app. Now it holds a `cells` map keyed by cellId,
-// where each cell has its OWN independent editor/evaluation/stepper
-// slice — exactly like independent Jupyter cells.
+// REWRITE NOTE: adds two new pieces of NOTEBOOK-LEVEL (not per-cell)
+// state on top of the existing multi-cell architecture:
 //
-// Shape:
-//   cells: {
-//     [cellId]: {
-//       editor:     { rawInput, debounceTimer },
-//       evaluation: { result, error, operationType },
-//       stepper:    { frames, currentFrameIndex, isPlaying },
-//     }
-//   }
-//   cellOrder: [cellId, cellId, ...]   // display order, top to bottom
+//   1. activeCellId — which cell's output the right-hand "video player"
+//      VisualizerPanel should currently display. Updated whenever a
+//      cell's editor gains focus (see CodeEditor.jsx's onFocus hook,
+//      wired in a later file). Defaults to the first cell so the
+//      right panel isn't empty on initial load.
 //
-// Every action now takes `cellId` as its first argument, so components
-// pass their own cellId in. Selectors follow the same pattern:
-//   useQuantumStore((s) => s.cells[cellId]?.evaluation.error)
+//   2. hasSeenIntro — whether the animated HeroIntro sequence has
+//      already played this session. Set to true once HeroIntro finishes
+//      (or is skipped), so refreshing mid-session via HMR or a state
+//      update doesn't re-trigger the intro animation every time —
+//      it's a "have we shown this already" flag, not persisted to
+//      localStorage (per-session only, resets on full page reload,
+//      which is the correct behavior for a "first impression" moment).
 //
-// Math.js instance + stdlib injection remain a SINGLE shared instance
-// across all cells (no reason to duplicate the gate library per cell —
-// I, X, Y, Z, H, CNOT, dagger, prob are constants, not per-cell state).
+// Everything else — the cells map, per-cell editor/evaluation/stepper
+// slices, all evaluation/stepper actions — is UNCHANGED from the
+// previous version.
 
 import { create } from "zustand";
 import { create as createMathInstance, all } from "mathjs";
@@ -82,6 +80,20 @@ export const useQuantumStore = create((set, get) => ({
     [FIRST_CELL_ID]: createEmptyCell(),
   },
 
+  // --- Split-view state: which cell the right panel displays ---
+  activeCellId: FIRST_CELL_ID,
+
+  setActiveCell: (cellId) => {
+    set(() => ({ activeCellId: cellId }));
+  },
+
+  // --- Hero intro playback flag ---
+  hasSeenIntro: false,
+
+  markIntroSeen: () => {
+    set(() => ({ hasSeenIntro: true }));
+  },
+
   /** Appends a new empty cell to the end of the notebook. */
   addCell: () => {
     const newId = generateCellId();
@@ -93,15 +105,23 @@ export const useQuantumStore = create((set, get) => ({
   },
 
   /** Removes a cell entirely. No-ops if it's the last remaining cell
-   *  (a notebook should never have zero cells — always at least one). */
+   *  (a notebook should never have zero cells — always at least one).
+   *  If the removed cell was the active one, falls back to the first
+   *  remaining cell so the visualizer panel never points at a dead id. */
   removeCell: (cellId) => {
     set((state) => {
       if (state.cellOrder.length <= 1) return state; // guard: keep >=1 cell
 
       const { [cellId]: _removed, ...remainingCells } = state.cells;
+      const remainingOrder = state.cellOrder.filter((id) => id !== cellId);
+
+      const nextActiveCellId =
+        state.activeCellId === cellId ? remainingOrder[0] : state.activeCellId;
+
       return {
-        cellOrder: state.cellOrder.filter((id) => id !== cellId),
+        cellOrder: remainingOrder,
         cells: remainingCells,
+        activeCellId: nextActiveCellId,
       };
     });
   },
