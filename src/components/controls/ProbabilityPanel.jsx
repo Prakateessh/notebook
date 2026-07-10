@@ -1,27 +1,25 @@
 // src/components/controls/ProbabilityPanel.jsx
 //
-// Probability Panel Compartment — NOTEBOOK CELL EDITION
+// Probability Panel Compartment — QUANTUM LIGHT GLASSMORPHISM
 // -----------------------------------------------------------------------
-// MODIFIED: now takes a `cellId` prop and reads that specific cell's
-// evaluation slice, instead of a single global slice.
+// MODIFIED FOR LIGHT THEME: per the design doc's exact spec for this
+// compartment — "a dynamic horizontal bar chart... Framer Motion
+// physically stretches and animates these bars" — the bar fill now
+// uses a cyan-quantum -> purple-quantum gradient (the doc's two named
+// accent colors) instead of the dark version's cyan-400 -> fuchsia-400
+// gradient (fuchsia was never actually specified anywhere in the doc;
+// purple-quantum is the doc's real secondary accent).
 //
-// Also restyled to be more compact, since this now lives inside a
-// two-column strip (PlaybackControls | ProbabilityPanel) at the bottom
-// of each notebook cell card, rather than occupying its own full bento
-// compartment. Bar height and label sizing are reduced to fit, but all
-// functionality — state-vector detection, Born-rule computation, basis
-// labeling — is fully preserved from the original file, nothing cut.
+// Track background, labels, and percentage text all flipped from
+// light-on-dark to dark-on-light. Basis-state labels now use font-code
+// (JetBrains Mono) since |00⟩-style labels read as technical/notation-
+// adjacent tokens, consistent with how the doc treats coordinate/label
+// text elsewhere.
 //
-// IMPORTANT ASSUMPTION (unchanged from original): this panel only makes
-// sense when the evaluation result is a STATE VECTOR (a column vector
-// of amplitudes), not an arbitrary matrix (e.g. a bare gate like `H`
-// alone, or a 2x2 result from A*B where A,B aren't state-related). We
-// detect "is this a column vector" heuristically and show a neutral
-// empty state otherwise, rather than crashing or showing nonsense bars.
-//
-// Basis labels: for an n-dimensional state vector, log2(n) qubits
-// are inferred, and labels are generated as |000>, |001>, etc.
-// If n isn't a power of 2, we fall back to numeric indices.
+// ALL LOGIC — extractStateVector, generateBasisLabels, the Born-rule
+// prob() computation, the state-vector-detection heuristic and its
+// documented limitations — is COMPLETELY UNCHANGED from the original
+// file. This is colors and font classes only.
 
 import { motion } from "framer-motion";
 import { useQuantumStore, math } from "../../store/useQuantumStore";
@@ -95,11 +93,11 @@ export function ProbabilityPanel({ cellId }) {
   if (error || !stateVector) {
     return (
       <div className="flex flex-col">
-        <h3 className="mb-2 font-mono text-[10px] uppercase tracking-wider text-slate-600">
+        <h3 className="mb-2 font-ui text-[10px] uppercase tracking-wider text-slate-400">
           Probability
         </h3>
         <div className="flex flex-1 items-center">
-          <p className="text-[11px] text-slate-700">
+          <p className="font-ui text-[11px] text-slate-400">
             {error ? "—" : "No state vector"}
           </p>
         </div>
@@ -116,7 +114,7 @@ export function ProbabilityPanel({ cellId }) {
 
   return (
     <div className="flex flex-col">
-      <h3 className="mb-2 font-mono text-[10px] uppercase tracking-wider text-slate-600">
+      <h3 className="mb-2 font-ui text-[10px] uppercase tracking-wider text-slate-400">
         Probability
       </h3>
 
@@ -140,18 +138,18 @@ function ProbabilityBar({ label, probability }) {
 
   return (
     <div className="flex items-center gap-2">
-      <span className="w-10 shrink-0 font-mono text-[10px] text-slate-500">
+      <span className="w-10 shrink-0 font-code text-[10px] text-slate-500">
         {label}
       </span>
-      <div className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-slate-800/60">
+      <div className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-slate-200/70">
         <motion.div
-          className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-cyan-400 to-fuchsia-400"
+          className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-cyan-quantum-500 to-purple-quantum-500"
           initial={{ width: 0 }}
           animate={{ width: `${percent}%` }}
           transition={{ type: "spring", stiffness: 220, damping: 26 }}
         />
       </div>
-      <span className="w-9 shrink-0 text-right font-mono text-[10px] text-slate-400">
+      <span className="w-9 shrink-0 text-right font-code text-[10px] text-slate-500">
         {percent}%
       </span>
     </div>

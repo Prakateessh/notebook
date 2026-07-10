@@ -1,25 +1,20 @@
 // src/components/visualizer/MatrixStepper.jsx
 //
-// Visual Stepper Orchestration Engine — NOTEBOOK CELL EDITION
+// Visual Stepper Orchestration Engine — QUANTUM LIGHT GLASSMORPHISM
 // -----------------------------------------------------------------------
-// MODIFIED: now takes a `cellId` prop and reads that specific cell's
-// stepper/evaluation slice, instead of a single global slice.
+// MODIFIED FOR LIGHT THEME: matrix grid containers switched from
+// bg-slate-950/40 (dark well) to bg-slate-50/60 (light recessed panel),
+// borders from slate-800/40 to slate-200. Text labels flipped from
+// light-on-dark to dark-on-light. All KaTeX/text rendering that isn't
+// inside a MatrixCell now uses font-math (Source Serif 4) for the
+// static-result fallback, and font-code (JetBrains Mono) for the
+// technical step-counter labels.
 //
-// IMPORTANT layoutId CHANGE: in the single-cell version, layoutIds like
-// "A-0-0" or "result-1-2" were globally unique because there was only
-// ONE stepper on screen. Now that MULTIPLE cells can each have their
-// own active stepper rendered simultaneously (stacked in the notebook),
-// those layoutIds would COLLIDE across cells — Framer Motion would try
-// to morph matrix cells between two completely unrelated notebook
-// cells, which is wrong and would produce bizarre cross-cell animation
-// glitches.
-//
-// FIX: every layoutId is now prefixed with this cell's own cellId,
-// e.g. `${cellId}-A-0-0`, `${cellId}-result-1-2`. This scopes Framer
-// Motion's shared-layout animation system to within each cell only.
-//
-// Everything else (frame choreography, fallback rendering) is
-// unchanged in logic from the original file.
+// EVERYTHING ELSE — the cellId-scoped layoutId prefixing (critical fix
+// from the notebook conversion), frame choreography logic, matrix
+// reconstruction from frames, fallback rendering when frames are
+// empty — is COMPLETELY UNCHANGED from the previous version. This file
+// is theme/color changes ONLY, zero logic changes.
 
 import { useEffect, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -105,10 +100,10 @@ export function MatrixStepper({ cellId }) {
   return (
     <div className="flex flex-col py-4">
       <div className="mb-3 flex items-center justify-between">
-        <span className="font-mono text-[10px] uppercase tracking-wider text-slate-600">
-          Out [{/* cell number injected by parent via aria if needed */}]
+        <span className="font-code text-[10px] uppercase tracking-wider text-slate-400">
+          Out
         </span>
-        <span className="font-mono text-[10px] text-slate-600">
+        <span className="font-code text-[10px] text-slate-400">
           Step {currentFrameIndex + 1} / {frames.length}
         </span>
       </div>
@@ -148,7 +143,7 @@ function MultiplicationFrame({ cellId, frame, matrixA, matrixB, resultDims }) {
           getState={(r) => (r === rowIndex ? "row-highlight" : "idle")}
         />
 
-        <span className="text-xl text-slate-600">×</span>
+        <span className="font-math text-xl text-slate-400">×</span>
 
         <MatrixGrid
           matrix={matrixB}
@@ -170,15 +165,15 @@ function MultiplicationFrame({ cellId, frame, matrixA, matrixB, resultDims }) {
               className="flex items-center gap-1"
             >
               <MatrixCell value={term.a} layoutId={`${cellId}-term-a-${k}`} variant="term" state="active" />
-              <span className="text-slate-500">×</span>
+              <span className="font-math text-slate-400">×</span>
               <MatrixCell value={term.b} layoutId={`${cellId}-term-b-${k}`} variant="term" state="active" />
-              {k < terms.length - 1 && <span className="ml-1 text-slate-500">+</span>}
+              {k < terms.length - 1 && <span className="font-math ml-1 text-slate-400">+</span>}
             </motion.div>
           ))}
         </div>
       </AnimatePresence>
 
-      <span className="text-slate-600">↓</span>
+      <span className="text-slate-400">↓</span>
 
       <MatrixGrid
         matrix={resultSoFar}
@@ -202,7 +197,7 @@ function KroneckerFrame({ cellId, frame }) {
     <div className="flex w-full flex-col items-center gap-5">
       <div className="flex items-center gap-3">
         <MatrixCell value={scalar} layoutId={`${cellId}-kron-scalar`} state="active" />
-        <span className="text-xl text-slate-600">⊗ B →</span>
+        <span className="font-math text-xl text-slate-400">⊗ B →</span>
         <MatrixGrid
           matrix={block}
           getLayoutId={(r, c) => `${cellId}-block-${r}-${c}`}
@@ -210,7 +205,7 @@ function KroneckerFrame({ cellId, frame }) {
         />
       </div>
 
-      <span className="text-slate-600">↓</span>
+      <span className="text-slate-400">↓</span>
 
       <MatrixGrid
         matrix={resultSoFar}
@@ -224,7 +219,7 @@ function KroneckerFrame({ cellId, frame }) {
 function CompleteFrame({ cellId, resultSoFar }) {
   return (
     <div className="flex flex-col items-center gap-2">
-      <span className="text-[10px] uppercase tracking-wider text-emerald-400/60">
+      <span className="font-code text-[10px] uppercase tracking-wider text-emerald-600/70">
         Complete
       </span>
       <MatrixGrid
@@ -238,7 +233,7 @@ function CompleteFrame({ cellId, resultSoFar }) {
 
 function MatrixGrid({ matrix, getLayoutId, getState }) {
   return (
-    <div className="flex flex-col gap-1 rounded-lg border border-slate-800/40 bg-slate-950/30 p-2.5">
+    <div className="flex flex-col gap-1 rounded-lg border border-slate-200 bg-slate-50/60 p-2.5">
       {matrix.map((row, r) => (
         <div key={r} className="flex gap-1">
           {row.map((val, c) => (
@@ -258,7 +253,7 @@ function MatrixGrid({ matrix, getLayoutId, getState }) {
 function StaticResultDisplay({ result }) {
   const latex = result?.toString ? result.toString() : String(result);
   return (
-    <div className="rounded-lg border border-slate-800/50 bg-slate-950/30 p-4">
+    <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-4 font-math">
       <InlineMath math={latex} />
     </div>
   );

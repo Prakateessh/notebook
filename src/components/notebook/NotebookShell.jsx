@@ -1,24 +1,20 @@
 // src/components/notebook/NotebookShell.jsx
 //
-// Notebook Shell — Scrollable Cell List
+// Notebook Shell — Scrollable Cell List — QUANTUM LIGHT GLASSMORPHISM
 // -----------------------------------------------------------------------
-// Top-level notebook container. Maps over cellOrder from the store and
-// renders one <Cell> per entry, stacked vertically, scrollable. Includes
-// the "+ Add Cell" affordance at the bottom, matching real notebook UX
-// (Jupyter/VS Code both put "add cell" controls below the last cell).
+// MODIFIED FOR LIGHT THEME: background switched from bg-slate-950 (dark)
+// to the doc's specified slate-50-equivalent canvas (#faf8ff, set
+// globally in index.css on the <html> element — this component no longer
+// needs to set its own background color, it just needs to NOT fight it
+// with a conflicting bg- class).
 //
-// AnimatePresence wraps the cell list so that adding/removing a cell
-// animates smoothly (new cells slide in, deleted cells collapse out)
-// rather than popping — consistent with the "no instant snapping"
-// morphing requirement from the original spec, now applied to the
-// notebook structure itself rather than just the matrix math.
+// Text colors flipped from light-on-dark (text-slate-400/600) to
+// dark-on-light (text-slate-600/700) for readable contrast against the
+// new light canvas.
 //
-// Design constraints applied:
-// - Calm, minimal background (bg-slate-950, no ambient glow wash —
-//   that decorative touch belonged to the old bento hero page; a
-//   notebook should read as a working document, not a landing page).
-// - Fixed max-width, centered — mirrors how VS Code/Jupyter constrain
-//   line length for readability rather than stretching edge-to-edge.
+// Structure, animation logic (AnimatePresence, addCell), and the
+// cellOrder mapping are UNCHANGED from the dark version — only colors
+// and font classes are touched in this file.
 
 import { AnimatePresence, motion } from "framer-motion";
 import { useQuantumStore } from "../../store/useQuantumStore";
@@ -31,20 +27,20 @@ export function NotebookShell() {
   const canDelete = cellOrder.length > 1;
 
   return (
-    <div className="min-h-screen w-full bg-slate-950">
+    <div className="min-h-screen w-full">
       <div className="mx-auto max-w-4xl px-4 py-8 md:px-6">
         {/* --- Notebook title/header --- */}
         <div className="mb-6 flex items-center justify-between">
-          <h1 className="font-mono text-sm font-medium tracking-wide text-slate-400">
+          <h1 className="font-ui text-sm font-medium tracking-wide text-slate-700">
             quantum-scratchpad
           </h1>
-          <span className="font-mono text-xs text-slate-600">
+          <span className="font-code text-xs text-slate-500">
             {cellOrder.length} {cellOrder.length === 1 ? "cell" : "cells"}
           </span>
         </div>
 
         {/* --- Cell list --- */}
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-4">
           <AnimatePresence initial={false}>
             {cellOrder.map((cellId, index) => (
               <Cell
@@ -62,11 +58,12 @@ export function NotebookShell() {
           onClick={addCell}
           whileTap={{ scale: 0.98 }}
           className="
-            mt-3 flex w-full items-center justify-center gap-2 rounded-xl
-            border border-dashed border-slate-800 py-3
-            font-mono text-xs text-slate-600
+            mt-4 flex w-full items-center justify-center gap-2 rounded-xl
+            border border-dashed border-slate-300 bg-white/40 py-3
+            font-ui text-xs text-slate-500
+            backdrop-blur-glass
             transition-colors duration-150
-            hover:border-slate-700 hover:bg-slate-900/40 hover:text-slate-400
+            hover:border-cyan-quantum-400/50 hover:bg-cyan-quantum-50/60 hover:text-cyan-quantum-700
           "
         >
           <IconPlus />

@@ -1,31 +1,23 @@
 // src/components/notebook/Cell.jsx
 //
-// Notebook Cell — Composite Card
+// Notebook Cell — Composite Card — QUANTUM LIGHT GLASSMORPHISM
 // -----------------------------------------------------------------------
-// Wraps ONE cell's editor + visualizer + playback controls + probability
-// panel into a single, self-contained Jupyter-style card. This is the
-// unit that NotebookShell.jsx stacks vertically and scrolls through.
+// MODIFIED FOR LIGHT THEME: this is the file where the "glassmorphism"
+// half of "Quantum Light Glassmorphism" really lives. Per the design
+// doc: translucent white containers (bg-white/80) with heavy backdrop
+// blur (backdrop-blur-md / our registered backdrop-blur-glass token),
+// replacing the old dark version's bg-slate-900/60 solid-ish panel.
 //
-// Design direction (per your "Jupyter/VS Code notebook" choice):
-// - Minimal chrome: thin border, no heavy glass/blur (that was the old
-//   bento aesthetic — a notebook cell should feel more like a clean
-//   code editor row, not a floating glass panel).
-// - Glow reserved ONLY for the active/focused cell — an idle cell
-//   sitting further down the page should look calm and quiet.
-// - Compact per-cell playback + probability strip BELOW the visualizer,
-//   not in separate bento boxes — this is what "self-contained like a
-//   real notebook cell" means structurally.
+// Border treatment also changes: the old dark cell used a plain
+// border-slate-800/50 with a color-only focus state (border-cyan-400/40).
+// The light glass version needs a slightly more visible border by
+// default (glass panels on a light background need SOME edge definition
+// or they disappear into the canvas), transitioning to the doc's
+// Cyan 600 (#006877, our cyan-quantum-600 token) on focus.
 //
-// Layout inside one cell:
-//   +--------------------------------------------------+
-//   | [cell number]                      [delete icon]  |  <- header row
-//   +--------------------------------------------------+
-//   | CodeEditor (compact, auto-height textarea)        |
-//   +--------------------------------------------------+
-//   | MatrixStepper (visualizer output)                 |
-//   +--------------------------------------------------+
-//   | PlaybackControls | ProbabilityPanel (side by side)|
-//   +--------------------------------------------------+
+// Structure (header row, editor, visualizer, controls strip) and all
+// interaction logic (focus/blur handling, delete guard) are UNCHANGED
+// from the dark version — only colors, blur, and font classes touched.
 
 import { useState } from "react";
 import { motion } from "framer-motion";
@@ -63,16 +55,18 @@ export function Cell({ cellId, cellNumber, canDelete }) {
         if (!e.currentTarget.contains(e.relatedTarget)) setIsFocused(false);
       }}
       className={`
-        group relative rounded-xl border bg-slate-900/60
+        group relative rounded-xl border bg-white/80
+        backdrop-blur-glass
+        shadow-[0_1px_3px_rgba(0,0,0,0.04),0_1px_2px_rgba(0,0,0,0.03)]
         transition-colors duration-200
-        ${isFocused ? "border-cyan-400/40" : "border-slate-800/50"}
+        ${isFocused ? "border-cyan-quantum-400/60" : "border-slate-200"}
       `}
     >
       {/* --- Header row: cell number + delete --- */}
-      <div className="flex items-center justify-between border-b border-slate-800/50 px-4 py-2">
-        <span className="font-mono text-xs text-slate-500">
+      <div className="flex items-center justify-between border-b border-slate-200/70 px-4 py-2">
+        <span className="font-code text-xs text-slate-500">
           In [{cellNumber}]
-          {hasError && <span className="ml-2 text-red-400/70">error</span>}
+          {hasError && <span className="ml-2 font-ui text-red-500/80">error</span>}
         </span>
 
         <button
@@ -80,8 +74,8 @@ export function Cell({ cellId, cellNumber, canDelete }) {
           disabled={!canDelete}
           aria-label="Delete cell"
           className="
-            rounded-md p-1 text-slate-600 opacity-0 transition-opacity
-            hover:bg-slate-800/60 hover:text-slate-300
+            rounded-md p-1 text-slate-400 opacity-0 transition-opacity
+            hover:bg-slate-100 hover:text-slate-600
             disabled:pointer-events-none disabled:opacity-0
             group-hover:opacity-100
           "
@@ -102,7 +96,7 @@ export function Cell({ cellId, cellNumber, canDelete }) {
       </div>
 
       {/* --- Compact controls strip: playback + probability side by side --- */}
-      <div className="grid grid-cols-2 gap-3 border-t border-slate-800/50 px-4 py-3">
+      <div className="grid grid-cols-2 gap-3 border-t border-slate-200/70 px-4 py-3">
         <PlaybackControls cellId={cellId} />
         <ProbabilityPanel cellId={cellId} />
       </div>

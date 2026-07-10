@@ -1,28 +1,19 @@
 // src/components/controls/PlaybackControls.jsx
 //
-// Playback Controls Compartment — NOTEBOOK CELL EDITION
+// Playback Controls Compartment — QUANTUM LIGHT GLASSMORPHISM
 // -----------------------------------------------------------------------
-// MODIFIED: now takes a `cellId` prop and reads/dispatches against that
-// specific cell's stepper slice, instead of a single global slice.
+// MODIFIED FOR LIGHT THEME: per the design doc's exact spec for this
+// compartment — "flat, clean aesthetic, transitioning to a Cyan 50
+// background on hover" — buttons now use bg-cyan-quantum-50 as the
+// hover state instead of the dark version's bg-slate-800/60 hover.
 //
-// Also restyled to be more compact, since this now lives inside a
-// two-column strip (PlaybackControls | ProbabilityPanel) at the bottom
-// of each notebook cell card, rather than occupying its own full bento
-// compartment. Buttons are slightly smaller, the scrub slider label
-// text is condensed, but all functionality from the original file is
-// fully preserved — nothing was cut, only re-sized to fit the new
-// compact layout.
+// The primary Play/Pause button uses cyan-quantum-600 as its resting
+// accent color (matching the doc's "Primary (Cyan 600)" spec for "the
+// Play button" specifically, called out by name in the design doc).
 //
-// Selective subscriptions: only reads this cell's stepper.currentFrameIndex,
-// stepper.frames.length, and stepper.isPlaying — so this component
-// doesn't re-render when other cells' state changes, or when this
-// cell's editor/evaluation slices change independently.
-//
-// Design constraints applied:
-// - No skeuomorphic buttons (no fake 3D bevel/drop-shadow buttons).
-// - Active/pressed states use glow + subtle scale, not depth tricks.
-// - Disabled states (e.g. no frames yet) are visually muted, not hidden
-//   — keeps the two-column strip from reflowing awkwardly.
+// All functionality (transport buttons, scrub slider, cellId-scoped
+// selectors/actions) is COMPLETELY UNCHANGED from the notebook-cell
+// version — this file is color/theme changes only.
 
 import { motion } from "framer-motion";
 import { useQuantumStore } from "../../store/useQuantumStore";
@@ -89,7 +80,7 @@ export function PlaybackControls({ cellId }) {
 
   return (
     <div className="flex flex-col">
-      <h3 className="mb-2 font-mono text-[10px] uppercase tracking-wider text-slate-600">
+      <h3 className="mb-2 font-ui text-[10px] uppercase tracking-wider text-slate-400">
         Playback
       </h3>
 
@@ -121,7 +112,7 @@ export function PlaybackControls({ cellId }) {
             <IconStepForward />
           </ControlButton>
 
-          <span className="ml-auto font-mono text-[10px] text-slate-600">
+          <span className="ml-auto font-code text-[10px] text-slate-400">
             {hasFrames ? `${currentFrameIndex + 1}/${frameCount}` : "—"}
           </span>
         </div>
@@ -136,7 +127,7 @@ export function PlaybackControls({ cellId }) {
           disabled={!hasFrames}
           className="
             h-1 w-full cursor-pointer appearance-none rounded-full
-            bg-slate-800 accent-cyan-400
+            bg-slate-200 accent-cyan-quantum-600
             disabled:cursor-not-allowed disabled:opacity-30
           "
         />
@@ -146,9 +137,10 @@ export function PlaybackControls({ cellId }) {
 }
 
 /**
- * Reusable control button. `primary` gets the accent glow treatment
- * (used for the central Play/Pause button). Disabled state mutes
- * opacity rather than hiding, so the transport bar never reflows.
+ * Reusable control button. `primary` gets the doc-specified Cyan 600
+ * treatment (the "Play button" color called out explicitly in the
+ * design doc). Disabled state mutes opacity rather than hiding, so the
+ * transport bar never reflows.
  */
 function ControlButton({ onClick, disabled, label, primary, children }) {
   return (
@@ -163,8 +155,8 @@ function ControlButton({ onClick, disabled, label, primary, children }) {
         disabled:cursor-not-allowed disabled:opacity-30
         ${
           primary
-            ? "border-cyan-400/50 bg-cyan-500/10 text-cyan-300 shadow-[0_0_10px_rgba(34,211,238,0.15)] hover:bg-cyan-500/20"
-            : "border-slate-800/60 bg-slate-900/40 text-slate-400 hover:border-slate-700 hover:text-slate-200"
+            ? "border-cyan-quantum-600/40 bg-cyan-quantum-50 text-cyan-quantum-700 hover:bg-cyan-quantum-100"
+            : "border-slate-200 bg-white/60 text-slate-500 hover:border-cyan-quantum-300 hover:bg-cyan-quantum-50 hover:text-cyan-quantum-700"
         }
       `}
     >

@@ -1,20 +1,28 @@
 // src/components/visualizer/MatrixCell.jsx
 //
-// Individual Animated Matrix Cell
+// Individual Animated Matrix Cell — QUANTUM LIGHT GLASSMORPHISM
 // -----------------------------------------------------------------------
-// The atomic visual unit of the stepper. Renders one cell of a matrix
-// (or a floating arithmetic term) with KaTeX, wrapped in a motion.div
-// that participates in Framer Motion's shared layout animation system.
+// MODIFIED FOR LIGHT THEME: per the design doc, all matrix/vector KaTeX
+// output renders in Source Serif 4 (font-math token), NOT the UI font —
+// this is the doc's explicit reasoning for using a serif here: visually
+// distinguishing complex quantum variables (e.g. v vs ν) is easier with
+// serif letterforms than with a neutral sans-serif UI font.
 //
-// This is deliberately a "dumb" presentational component: it receives
-// a value + highlight state as props and renders it. All frame-to-frame
-// orchestration (which cells highlight when, sequencing) lives in
-// MatrixStepper.jsx. This file only knows how to look good and animate
-// smoothly when its props change.
+// State colors flipped from dark-glow treatments (cyan/fuchsia/amber
+// glows on a near-black background) to light-appropriate washes: soft
+// tinted backgrounds with a colored border, no heavy box-shadow glow
+// (glow effects that look premium on dark backgrounds tend to look like
+// muddy smudges on light backgrounds — a crisper border-based highlight
+// reads better here).
 //
-// Complex number formatting: per your rectangular-form decision,
-// a+bi. Handles math.js Complex instances (has .re/.im) and plain
-// JS numbers uniformly.
+// Per the doc's accent system: Cyan (cyan-quantum) for the PRIMARY
+// highlight (row highlight, matches "highlighting the current row/column"
+// spec), Purple (purple-quantum) for the SECONDARY accent (column
+// highlight, since the doc calls purple "secondary... variable grouping").
+//
+// Everything else (layoutId prop passthrough, complex-number formatting,
+// roundClean logic) is UNCHANGED from the original file — pure logic,
+// no theme dependency.
 
 import { motion } from "framer-motion";
 import { InlineMath } from "react-katex";
@@ -56,7 +64,7 @@ function roundClean(n) {
  *        animation system; cells that share a layoutId across frames
  *        will morph between positions/sizes instead of popping.
  * @param {"idle"|"row-highlight"|"col-highlight"|"active"|"settled"} props.state
- *        visual state driving border/glow color.
+ *        visual state driving border/background color.
  * @param {"cell"|"term"} props.variant - "cell" = fixed matrix cell,
  *        "term" = floating arithmetic term (smaller, used for the
  *        a*b product tokens shown mid-calculation).
@@ -70,11 +78,11 @@ export function MatrixCell({
   const latex = formatValueAsLatex(value);
 
   const stateStyles = {
-    idle: "border-slate-800/60 bg-slate-900/40",
-    "row-highlight": "border-cyan-400/60 bg-cyan-500/10 shadow-[0_0_16px_rgba(34,211,238,0.25)]",
-    "col-highlight": "border-fuchsia-400/60 bg-fuchsia-500/10 shadow-[0_0_16px_rgba(232,121,249,0.25)]",
-    active: "border-amber-400/70 bg-amber-500/10 shadow-[0_0_20px_rgba(251,191,36,0.3)]",
-    settled: "border-emerald-400/40 bg-emerald-500/5 shadow-[0_0_12px_rgba(52,211,153,0.15)]",
+    idle: "border-slate-200 bg-white/50",
+    "row-highlight": "border-cyan-quantum-400 bg-cyan-quantum-50",
+    "col-highlight": "border-purple-quantum-400 bg-purple-quantum-50",
+    active: "border-amber-400 bg-amber-50",
+    settled: "border-emerald-300 bg-emerald-50/70",
   };
 
   const sizeClasses =
@@ -96,14 +104,14 @@ export function MatrixCell({
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.85 }}
       className={`
-        flex items-center justify-center rounded-xl border
-        text-slate-100 transition-colors duration-200
+        flex items-center justify-center rounded-lg border
+        font-math text-slate-800 transition-colors duration-200
         ${stateStyles[state]}
         ${sizeClasses}
       `}
     >
       {latex ? <InlineMath math={latex} /> : (
-        <span className="text-slate-600">·</span>
+        <span className="font-math text-slate-300">·</span>
       )}
     </motion.div>
   );
