@@ -2,24 +2,22 @@
 //
 // Visualizer Panel — The Right‑Column "Video Player"
 // -----------------------------------------------------------------------
-// KEYBOARD SHORTCUTS (focus‑based):
-//   Click anywhere inside the visualiser panel to give it focus.
-//   Then use:
-//     ←  ArrowLeft   → previous frame
-//     →  ArrowRight  → next frame
-//     Space          → toggle play/pause
-//   The panel shows a subtle glow when it’s focused and ready for input.
+// Purple‑theme polish:
+//   • Header title uses gradient‑text‑subtle (deep charcoal → faint purple).
+//   • The "Measure" button is wrapped in .glow-border-btn – a rotating
+//     lavender glow appears on hover.
+//   • PlaybackControls step buttons remain cyan for functional contrast.
+//   • Keyboard shortcuts unchanged.
 //
-//   Shortcuts are disabled automatically when you focus a text input
-//   (code editor) or another interactive element.
+// REMOVED: Bloch sphere – will be re‑added later in a dedicated layout.
+// This keeps the visualizer clean and focused on the stepper.
 
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuantumStore } from "../../store/useQuantumStore";
 import { MatrixStepper } from "./MatrixStepper";
 import { PlaybackControls } from "../controls/PlaybackControls";
 import { ProbabilityPanel } from "../controls/ProbabilityPanel";
-import { BlochSphere } from "../three/BlochSphere";
 import { GENTLE_SETTLE } from "../../lib/motionPresets";
 
 export function VisualizerPanel() {
@@ -28,8 +26,7 @@ export function VisualizerPanel() {
   const cellResult = useQuantumStore(
     (s) => s.cells[activeCellId]?.evaluation.result
   );
-  const hasResult =
-    cellResult !== null && cellResult !== undefined;
+  const hasResult = cellResult !== null && cellResult !== undefined;
   const hasError = useQuantumStore(
     (s) => !!s.cells[activeCellId]?.evaluation.error
   );
@@ -39,30 +36,7 @@ export function VisualizerPanel() {
 
   const isStateVector = hasResult && isColumnVector(cellResult);
 
-  const blochAmplitudes = useMemo(() => {
-    if (!isStateVector || !cellResult) return null;
-    try {
-      let arr;
-      if (typeof cellResult.toArray === "function") {
-        const raw = cellResult.toArray();
-        arr = Array.isArray(raw[0]) ? raw.map(row => row[0]) : raw;
-      } else if (Array.isArray(cellResult)) {
-        arr = Array.isArray(cellResult[0]) ? cellResult.map(row => row[0]) : cellResult;
-      } else {
-        return null;
-      }
-      if (arr.length === 2) {
-        return [
-          typeof arr[0] === 'object' ? arr[0] : { re: arr[0], im: 0 },
-          typeof arr[1] === 'object' ? arr[1] : { re: arr[1], im: 0 }
-        ];
-      }
-      return null;
-    } catch {
-      return null;
-    }
-  }, [isStateVector, cellResult]);
-
+  // Measurement handler
   const handleMeasure = useCallback(() => {
     if (!activeCellId || !isStateVector) return;
 
@@ -70,8 +44,13 @@ export function VisualizerPanel() {
     try {
       if (typeof cellResult.toArray === "function") {
         const arr = cellResult.toArray();
-        if (Array.isArray(arr) && arr.length > 0 && Array.isArray(arr[0]) && arr[0].length === 1) {
-          amplitudes = arr.map(row => row[0]);
+        if (
+          Array.isArray(arr) &&
+          arr.length > 0 &&
+          Array.isArray(arr[0]) &&
+          arr[0].length === 1
+        ) {
+          amplitudes = arr.map((row) => row[0]);
         } else if (Array.isArray(arr) && arr.length > 0 && !Array.isArray(arr[0])) {
           amplitudes = arr;
         } else {
@@ -91,8 +70,11 @@ export function VisualizerPanel() {
     try {
       probabilities = math.prob(amplitudes);
     } catch {
-      probabilities = amplitudes.map(a => {
-        const abs = typeof a === 'object' && a.re !== undefined ? Math.hypot(a.re, a.im) : Math.abs(a);
+      probabilities = amplitudes.map((a) => {
+        const abs =
+          typeof a === "object" && a.re !== undefined
+            ? Math.hypot(a.re, a.im)
+            : Math.abs(a);
         return abs * abs;
       });
     }
@@ -112,12 +94,12 @@ export function VisualizerPanel() {
 
     let newResult;
     try {
-      newResult = math.matrix(newAmplitudes.map(v => [v]));
+      newResult = math.matrix(newAmplitudes.map((v) => [v]));
     } catch {
       newResult = newAmplitudes;
     }
 
-    useQuantumStore.setState(state => ({
+    useQuantumStore.setState((state) => ({
       cells: {
         ...state.cells,
         [activeCellId]: {
@@ -132,22 +114,20 @@ export function VisualizerPanel() {
     }));
   }, [activeCellId, isStateVector, cellResult]);
 
-  // --- Focusable container for keyboard shortcuts ---
+  // Keyboard shortcuts – focus‑based
   const panelRef = useRef(null);
-
   useEffect(() => {
     const el = panelRef.current;
     if (!el) return;
 
     const handleKeyDown = (e) => {
-      // Only act when the panel itself or a child is focused,
-      // and no text input is active inside it.
       const active = document.activeElement;
       if (
         active?.tagName === "INPUT" ||
         active?.tagName === "TEXTAREA" ||
         active?.isContentEditable
-      ) return;
+      )
+        return;
 
       if (!activeCellId) return;
 
@@ -170,24 +150,22 @@ export function VisualizerPanel() {
   return (
     <div
       ref={panelRef}
-      tabIndex={0}   // makes the div focusable via click
-      className={`
-        flex h-full flex-col bg-white/50 backdrop-blur-glass
-        outline-none transition-shadow duration-200
-        focus:ring-2 focus:ring-cyan-quantum-400/60 focus:ring-inset
-      `}
+      tabIndex={0}
+      className="flex h-full flex-col bg-white/60 backdrop-blur-glass outline-none transition-shadow duration-200 focus:ring-2 focus:ring-purple-300/60 focus:ring-inset"
     >
       {/* --- Header --- */}
-      <div className="flex items-center justify-between border-b border-slate-200/70 px-6 py-4">
-        <h2 className="font-ui text-sm font-medium tracking-wide text-slate-700">
+      <div className="flex items-center justify-between border-b border-purple-100/70 px-6 py-4">
+        <h2 className="font-ui text-sm font-medium tracking-wide gradient-text-subtle">
           Visualizer
         </h2>
         <span className="font-code text-xs text-slate-400">
-          {activeCellId ? `watching In [${activeCellNumber}]` : "no cell selected"}
+          {activeCellId
+            ? `watching In [${activeCellNumber}]`
+            : "no cell selected"}
         </span>
       </div>
 
-      {/* --- Main stage --- */}
+      {/* --- Main stage: MatrixStepper or empty‑state watermark --- */}
       <div className="relative flex flex-1 flex-col items-center justify-center overflow-auto px-6 py-4">
         <AnimatePresence mode="wait">
           {showEmptyState ? (
@@ -204,7 +182,7 @@ export function VisualizerPanel() {
                 <p className="font-ui text-sm text-slate-400">
                   Click into a cell and evaluate an expression
                 </p>
-                <p className="font-code text-xs text-slate-300">
+                <p className="font-code text-xs text-purple-300">
                   H * |0⟩ · kron(X, Y) · CNOT * |10⟩
                 </p>
               </div>
@@ -224,35 +202,29 @@ export function VisualizerPanel() {
         </AnimatePresence>
       </div>
 
-      {/* --- Bloch sphere --- */}
-      {blochAmplitudes && (
-        <div className="flex justify-center border-t border-slate-200/70 px-6 py-4">
-          <BlochSphere state={blochAmplitudes} size={200} showLabels={false} />
-        </div>
-      )}
-
-      {/* --- Footer --- */}
+      {/* --- Footer strip: playback + probability, plus Measure button --- */}
       {activeCellId && (
-        <div className="border-t border-slate-200/70 px-6 py-4">
+        <div className="border-t border-purple-100/70 px-6 py-4">
           <div className="grid grid-cols-2 gap-6 mb-4">
             <PlaybackControls cellId={activeCellId} />
             <ProbabilityPanel cellId={activeCellId} />
           </div>
 
           {isStateVector && (
-            <motion.button
-              onClick={handleMeasure}
-              whileTap={{ scale: 0.95 }}
-              className="
-                w-full rounded-xl border border-purple-quantum-400/60
-                bg-purple-quantum-50 py-2.5 font-ui text-xs font-medium
-                text-purple-quantum-700 transition-colors duration-150
-                hover:bg-purple-quantum-100 hover:border-purple-quantum-500
-                active:bg-purple-quantum-200
-              "
-            >
-              Measure
-            </motion.button>
+            <div className="glow-border-btn rounded-xl">
+              <motion.button
+                onClick={handleMeasure}
+                whileTap={{ scale: 0.95 }}
+                className="
+                  w-full rounded-xl border-2 border-purple-200 bg-purple-50/70
+                  py-2.5 font-ui text-xs font-semibold text-purple-700
+                  backdrop-blur-sm transition-all duration-300
+                  hover:bg-purple-100 hover:border-purple-300
+                "
+              >
+                Measure
+              </motion.button>
+            </div>
           )}
         </div>
       )}
@@ -272,7 +244,7 @@ function isColumnVector(result) {
       return false;
     }
     if (!Array.isArray(arr) || arr.length === 0) return false;
-    return arr.every(row => Array.isArray(row) && row.length === 1);
+    return arr.every((row) => Array.isArray(row) && row.length === 1);
   } catch {
     return false;
   }
@@ -291,11 +263,11 @@ function WatermarkPattern() {
   ];
 
   return (
-    <div className="pointer-events-none absolute inset-0 overflow-hidden opacity-[0.06]">
+    <div className="pointer-events-none absolute inset-0 overflow-hidden opacity-[0.05]">
       {placements.map((p, i) => (
         <span
           key={i}
-          className="font-math absolute select-none text-cyan-quantum-600"
+          className="font-math absolute select-none text-purple-300"
           style={{
             top: p.top,
             left: p.left,

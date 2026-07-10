@@ -2,9 +2,9 @@
 //
 // Central Zustand store for the Quantum Math Scratchpad — SPLIT‑VIEW EDITION.
 // -----------------------------------------------------------------------
-// NEW: Chained multiplications (e.g., H * H * |0>) now produce a single
-// sequence of frames that step through each pairwise multiplication in
-// order, showing intermediate results before moving to the next factor.
+// NEW: Smarter error messages – common Math.js errors are replaced with
+//      friendly quantum‑specific hints.
+// NEW: moveCell action – swaps cell positions in cellOrder for reordering.
 
 import { create } from "zustand";
 import { create as createMathInstance, all } from "mathjs";
@@ -28,7 +28,6 @@ function detectOperationType(rawInput) {
   const trimmed = rawInput.trim();
   if (/^\s*let\s+[a-zA-Z_]\w*\s*=/.test(trimmed)) return "let";
   if (/^\s*kron\s*\(/.test(trimmed)) return "kronecker";
-  // Multiplication is present if there's at least one '*'
   if (/\*/.test(trimmed)) return "multiplication";
   return "gate";
 }
@@ -41,16 +40,17 @@ function isGateMatrix(result) {
   return arr.length >= 2 && arr[0].length >= 2;
 }
 
-function extractLastExpression(rawText) {
-  const lines = rawText.split("\n").map((line) => line.trim());
-  const meaningful = lines.filter(
-    (line) => line.length > 0 && !line.startsWith("//")
-  );
-  return meaningful.length > 0 ? meaningful[meaningful.length - 1] : "";
+function buildWholeCellExpression(rawText) {
+  const lines = rawText.split("\n");
+  const meaningful = lines
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("//"));
+  return meaningful.join(" ");
 }
 
-function createEmptyCell() {
+function createEmptyCell(type = "code") {
   return {
+    type,
     editor: { rawInput: "", debounceTimer: null },
     evaluation: { result: null, error: null, operationType: "unknown" },
     stepper: { frames: [], currentFrameIndex: 0, isPlaying: false },
@@ -59,6 +59,38 @@ function createEmptyCell() {
 
 function generateCellId() {
   return `cell-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// ---- smarter error messages ----
+function friendlyError(originalError, expression) {
+  const msg = originalError.message || originalError.toString();
+
+  // Dimension mismatch
+  if (/dimension/i.test(msg) || /columns/i.test(msg)) {
+    return "Gate and state dimensions don't match. For example, a 4×4 gate needs a 4‑component state (like |10⟩ for CNOT).";
+  }
+
+  // Unknown symbol (often a gate without *)
+  if (/Undefined symbol/i.test(msg)) {
+    const match = msg.match(/Undefined symbol\s+(\w+)/i);
+    if (match) {
+      const sym = match[1];
+      const known = ["I","X","Y","Z","H","S","T","CNOT","SWAP","CZ","CY","CH","CCNOT",
+                     "Rx","Ry","Rz","kron","dagger","prob","expect","variance",
+                     "commutator","anticommutator","isUnitary","controlled"];
+      if (known.includes(sym)) {
+        return `"${sym}" is a quantum gate or function. Did you forget to multiply with '*'? Example: ${sym} * |0>`;
+      }
+    }
+  }
+
+  // Unexpected end (often missing closing bracket/paren)
+  if (/Unexpected end/i.test(msg)) {
+    return "Expression seems incomplete. Check for missing parentheses or brackets.";
+  }
+
+  // Generic fallback
+  return msg;
 }
 
 const FIRST_CELL_ID = generateCellId();
@@ -72,11 +104,11 @@ export const useQuantumStore = create((set, get) => ({
   markIntroSeen: () => set(() => ({ hasSeenIntro: true })),
   variables: {},
 
-  addCell: () => {
+  addCell: (type = "code") => {
     const newId = generateCellId();
     set((state) => ({
       cellOrder: [...state.cellOrder, newId],
-      cells: { ...state.cells, [newId]: createEmptyCell() },
+      cells: { ...state.cells, [newId]: createEmptyCell(type) },
     }));
     return newId;
   },
@@ -93,6 +125,19 @@ export const useQuantumStore = create((set, get) => ({
         cells: remainingCells,
         activeCellId: nextActiveCellId,
       };
+    });
+  },
+
+  // ----- cell reordering (used by drag-and-drop or up/down buttons) -----
+  moveCell: (cellId, newIndex) => {
+    set((state) => {
+      const oldIndex = state.cellOrder.indexOf(cellId);
+      if (oldIndex === -1 || oldIndex === newIndex) return state;
+      const newOrder = [...state.cellOrder];
+      // Remove from old position and insert at new position
+      newOrder.splice(oldIndex, 1);
+      newOrder.splice(newIndex, 0, cellId);
+      return { cellOrder: newOrder };
     });
   },
 
@@ -132,7 +177,10 @@ export const useQuantumStore = create((set, get) => ({
   },
 
   evaluateInput: (cellId, rawText) => {
-    const expression = extractLastExpression(rawText || "");
+    const cell = get().cells[cellId];
+    if (!cell || cell.type !== "code") return;
+
+    const expression = buildWholeCellExpression(rawText || "");
     if (!expression) {
       set((state) => ({
         cells: {
@@ -192,12 +240,14 @@ export const useQuantumStore = create((set, get) => ({
 
       get().generateFrames(cellId, preprocessed, operationType, result);
     } catch (err) {
+      // ---- friendly error ----
+      const friendly = friendlyError(err, expression);
       set((state) => ({
         cells: {
           ...state.cells,
           [cellId]: {
             ...state.cells[cellId],
-            evaluation: { ...state.cells[cellId].evaluation, error: err.message, result: null },
+            evaluation: { ...state.cells[cellId].evaluation, error: friendly, result: null },
             stepper: { frames: [], currentFrameIndex: 0, isPlaying: false },
           },
         },
@@ -219,37 +269,26 @@ export const useQuantumStore = create((set, get) => ({
           frames = generateKroneckerSteps(A, B, mathOps);
         }
       } else if (operationType === "multiplication") {
-        // Split the preprocessed string by '*'. Dirac expanded kets, so it's safe.
-        const parts = preprocessedInput.split("*").map(s => s.trim());
-
+        const parts = preprocessedInput.split("*");
         if (parts.length === 2) {
-          // Simple two‑operand multiplication – same as before
           const evalA = math.evaluate(parts[0], { ...get().variables });
           const evalB = math.evaluate(parts[1], { ...get().variables });
           const A = evalA.toArray ? evalA.toArray() : evalA;
           const B = evalB.toArray ? evalB.toArray() : evalB;
           frames = generateMultiplicationSteps(A, B, mathOps);
-          // Add chain step index for layout scoping (0 for simple case)
           frames = frames.map(f => ({ ...f, chainStep: 0 }));
         } else {
-          // ---- Chained multiplication ----
-          // Evaluate all operands in order
           const operands = parts.map(p => math.evaluate(p, { ...get().variables }));
-          // We'll accumulate frames step by step
-          let currentResult = operands[0];               // leftmost
+          let currentResult = operands[0];
           for (let i = 1; i < operands.length; i++) {
             const nextOperand = operands[i];
             const A = currentResult.toArray ? currentResult.toArray() : currentResult;
             const B = nextOperand.toArray ? nextOperand.toArray() : nextOperand;
             const stepFrames = generateMultiplicationSteps(A, B, mathOps);
-            // Tag frames with the chain step index so the UI can scope layoutIds
             const tagged = stepFrames.map(f => ({ ...f, chainStep: i - 1 }));
             frames.push(...tagged);
-            // Compute the actual product (Math.js) for the next iteration
             currentResult = math.multiply(currentResult, nextOperand);
           }
-          // The last frame of the last step is already a "complete" frame,
-          // but we don't duplicate it. The chaining naturally ends with one.
         }
       } else if (operationType === "gate") {
         const gateMatrix = result.toArray();
@@ -334,6 +373,15 @@ export const useQuantumStore = create((set, get) => ({
         },
       };
     });
+  },
+
+  setCellType: (cellId, type) => {
+    set((state) => ({
+      cells: {
+        ...state.cells,
+        [cellId]: { ...state.cells[cellId], type },
+      },
+    }));
   },
 }));
 
