@@ -2,26 +2,14 @@
 //
 // Central Zustand store for the Quantum Math Scratchpad — SPLIT-VIEW EDITION.
 // -----------------------------------------------------------------------
-// REWRITE NOTE: adds two new pieces of NOTEBOOK-LEVEL (not per-cell)
-// state on top of the existing multi-cell architecture:
-//
-//   1. activeCellId — which cell's output the right-hand "video player"
-//      VisualizerPanel should currently display. Updated whenever a
-//      cell's editor gains focus (see CodeEditor.jsx's onFocus hook,
-//      wired in a later file). Defaults to the first cell so the
-//      right panel isn't empty on initial load.
-//
-//   2. hasSeenIntro — whether the animated HeroIntro sequence has
-//      already played this session. Set to true once HeroIntro finishes
-//      (or is skipped), so refreshing mid-session via HMR or a state
-//      update doesn't re-trigger the intro animation every time —
-//      it's a "have we shown this already" flag, not persisted to
-//      localStorage (per-session only, resets on full page reload,
-//      which is the correct behavior for a "first impression" moment).
-//
-// Everything else — the cells map, per-cell editor/evaluation/stepper
-// slices, all evaluation/stepper actions — is UNCHANGED from the
-// previous version.
+// CHANGE: generateFrames now starts every new evaluation PAUSED
+// (isPlaying: false) instead of auto-playing. Per your request, the
+// stepper should feel like manual step-by-step navigation (prev/next
+// buttons) rather than an auto-advancing "video" — useful when you
+// want to linger on small individual steps rather than watch them
+// cascade automatically. Play/pause is still available as an option
+// for those who DO want auto-advance, but it's no longer the default
+// behavior on evaluation.
 
 import { create } from "zustand";
 import { create as createMathInstance, all } from "mathjs";
@@ -46,7 +34,14 @@ function detectOperationType(preprocessedInput) {
   return "unknown";
 }
 
-/** Factory for a brand new, empty cell's state slice. */
+function extractLastExpression(rawText) {
+  const lines = rawText.split("\n").map((line) => line.trim());
+  const meaningful = lines.filter(
+    (line) => line.length > 0 && !line.startsWith("//")
+  );
+  return meaningful.length > 0 ? meaningful[meaningful.length - 1] : "";
+}
+
 function createEmptyCell() {
   return {
     editor: {
@@ -66,7 +61,6 @@ function createEmptyCell() {
   };
 }
 
-/** Generates a reasonably unique cell id without needing a uuid dependency. */
 function generateCellId() {
   return `cell-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -74,27 +68,23 @@ function generateCellId() {
 const FIRST_CELL_ID = generateCellId();
 
 export const useQuantumStore = create((set, get) => ({
-  // ================= NOTEBOOK-LEVEL STATE =================
   cellOrder: [FIRST_CELL_ID],
   cells: {
     [FIRST_CELL_ID]: createEmptyCell(),
   },
 
-  // --- Split-view state: which cell the right panel displays ---
   activeCellId: FIRST_CELL_ID,
 
   setActiveCell: (cellId) => {
     set(() => ({ activeCellId: cellId }));
   },
 
-  // --- Hero intro playback flag ---
   hasSeenIntro: false,
 
   markIntroSeen: () => {
     set(() => ({ hasSeenIntro: true }));
   },
 
-  /** Appends a new empty cell to the end of the notebook. */
   addCell: () => {
     const newId = generateCellId();
     set((state) => ({
@@ -104,13 +94,9 @@ export const useQuantumStore = create((set, get) => ({
     return newId;
   },
 
-  /** Removes a cell entirely. No-ops if it's the last remaining cell
-   *  (a notebook should never have zero cells — always at least one).
-   *  If the removed cell was the active one, falls back to the first
-   *  remaining cell so the visualizer panel never points at a dead id. */
   removeCell: (cellId) => {
     set((state) => {
-      if (state.cellOrder.length <= 1) return state; // guard: keep >=1 cell
+      if (state.cellOrder.length <= 1) return state;
 
       const { [cellId]: _removed, ...remainingCells } = state.cells;
       const remainingOrder = state.cellOrder.filter((id) => id !== cellId);
@@ -125,8 +111,6 @@ export const useQuantumStore = create((set, get) => ({
       };
     });
   },
-
-  // ================= PER-CELL EDITOR ACTIONS =================
 
   setRawInput: (cellId, text) => {
     set((state) => ({
@@ -167,12 +151,10 @@ export const useQuantumStore = create((set, get) => ({
     get().evaluateInput(cellId, text);
   },
 
-  // ================= PER-CELL EVALUATION =================
-
   evaluateInput: (cellId, rawText) => {
-    // Guard: ignore empty/whitespace-only input rather than throwing
-    // a confusing "Undefined symbol" error at the user.
-    if (!rawText || !rawText.trim()) {
+    const expression = extractLastExpression(rawText || "");
+
+    if (!expression) {
       set((state) => ({
         cells: {
           ...state.cells,
@@ -187,7 +169,7 @@ export const useQuantumStore = create((set, get) => ({
     }
 
     try {
-      const preprocessed = preprocessDirac(rawText);
+      const preprocessed = preprocessDirac(expression);
       const result = math.evaluate(preprocessed, {});
       const operationType = detectOperationType(preprocessed);
 
@@ -215,8 +197,6 @@ export const useQuantumStore = create((set, get) => ({
       }));
     }
   },
-
-  // ================= PER-CELL STEPPER =================
 
   generateFrames: (cellId, preprocessedInput, operationType) => {
     try {
@@ -247,7 +227,10 @@ export const useQuantumStore = create((set, get) => ({
           ...state.cells,
           [cellId]: {
             ...state.cells[cellId],
-            stepper: { frames, currentFrameIndex: 0, isPlaying: frames.length > 0 },
+            // CHANGED: was `isPlaying: frames.length > 0` (auto-played
+            // immediately on evaluation). Now always starts paused —
+            // user steps through manually via prev/next buttons.
+            stepper: { frames, currentFrameIndex: 0, isPlaying: false },
           },
         },
       }));
@@ -263,8 +246,6 @@ export const useQuantumStore = create((set, get) => ({
       }));
     }
   },
-
-  // ================= PER-CELL PLAYBACK CONTROLS =================
 
   nextFrame: (cellId) => {
     set((state) => {

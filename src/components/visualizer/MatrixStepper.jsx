@@ -1,28 +1,14 @@
 // src/components/visualizer/MatrixStepper.jsx
 //
-// Visual Stepper Orchestration Engine — REWRITE
+// Visual Stepper Orchestration Engine
 // -----------------------------------------------------------------------
-// CHANGES FROM PREVIOUS VERSION:
-//
-//   1. Kronecker rendering is now DELEGATED to KroneckerStepper.jsx
-//      entirely (the old inline KroneckerFrame function — which you
-//      correctly called "trash" — is deleted from this file). This
-//      component now just detects frame.type === "block-compute" and
-//      hands the whole frame off to <KroneckerStepper>, which owns
-//      the full fly-and-duplicate animation independently.
-//
-//   2. Matrix multiplication frames now use the shared motionPresets
-//      (MATRIX_MORPH, PLAYFUL_BOUNCE) instead of ad-hoc inline spring
-//      objects, so multiplication and Kronecker animations feel like
-//      they belong to the same designed motion system.
-//
-//   3. Still takes a `cellId` prop and scopes every layoutId with it
-//      (unchanged from the notebook-cell rewrite — still critical for
-//      preventing cross-cell animation collisions).
-//
-// Frame choreography logic, matrix A/B reconstruction from
-// cell-compute frames, and the empty-state fallback are otherwise
-// UNCHANGED in behavior from the previous version.
+// BUG FIX: StaticResultDisplay previously called result.toString(),
+// which dumps Math.js's raw bracket-list text form (e.g. "[[0, -i],
+// [i, 0]]") instead of a real matrix layout. FIX: results that are
+// matrices/vectors now render as a proper KaTeX \begin{bmatrix}...\end{bmatrix}
+// block, with each entry formatted through the same rectangular a+bi
+// complex-number logic used everywhere else in the app (MatrixCell).
+// Scalars (plain single numbers) still render as a simple inline value.
 
 import { useEffect, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -45,22 +31,17 @@ export function MatrixStepper({ cellId }) {
 
   const currentFrame = frames[currentFrameIndex];
 
-  // --- Auto-advance playback (per-cell, calls nextFrame with THIS cellId) ---
   useEffect(() => {
     if (!isPlaying || frames.length === 0) return;
     if (currentFrameIndex >= frames.length - 1) return;
 
     const timer = setTimeout(() => {
       nextFrame(cellId);
-    }, 1100); // slowed slightly from 900ms — matches the "cinematic,
-    // slow, watchable" pacing goal from motionPresets.DURATIONS.cinematic
+    }, 1100);
 
     return () => clearTimeout(timer);
   }, [isPlaying, currentFrameIndex, frames.length, nextFrame, cellId]);
 
-  // --- Reconstruct full A and B matrices from cell-compute frames
-  //     (multiplication only — Kronecker frames now carry matrixA/
-  //     matrixB directly, no reconstruction needed for that case). ---
   const { matrixA, matrixB, resultDims } = useMemo(() => {
     if (!frames.length) return { matrixA: null, matrixB: null, resultDims: null };
 
@@ -93,10 +74,8 @@ export function MatrixStepper({ cellId }) {
     };
   }, [frames]);
 
-  // --- Fallback: no frames available ---
   if (!frames.length) {
     if (!rawResult && !errorMessage) {
-      // Genuinely empty cell — don't render an awkward empty box at all.
       return null;
     }
     return (
@@ -132,7 +111,6 @@ export function MatrixStepper({ cellId }) {
           />
         )}
 
-        {/* --- Kronecker frames fully delegated to KroneckerStepper --- */}
         {currentFrame.type === "block-compute" && (
           <KroneckerStepper cellId={cellId} frame={currentFrame} />
         )}
@@ -141,9 +119,6 @@ export function MatrixStepper({ cellId }) {
           <CompleteFrame
             cellId={cellId}
             resultSoFar={currentFrame.resultSoFar}
-            // Kronecker's "complete" frame carries matrixA/matrixB —
-            // multiplication's does not. Passing both through so
-            // CompleteFrame can decide which visual treatment fits.
             isKronecker={Boolean(currentFrame.matrixA)}
           />
         )}
@@ -250,8 +225,69 @@ function MatrixGrid({ matrix, getLayoutId, getState }) {
   );
 }
 
+// ============================================================
+// BUG FIX: proper bracketed-matrix LaTeX rendering, replacing
+// the old raw result.toString() call.
+// ============================================================
+
+/** Rounds to 4 decimals, strips trailing zeros. Same logic as MatrixCell. */
+function roundClean(n) {
+  return Math.round(n * 10000) / 10000;
+}
+
+/** Formats one entry (real or complex) as rectangular a+bi LaTeX text. */
+function formatEntryLatex(value) {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object" && "re" in value && "im" in value) {
+    const re = roundClean(value.re);
+    const im = roundClean(value.im);
+    if (im === 0) return `${re}`;
+    const sign = im < 0 ? "-" : "+";
+    const imAbs = Math.abs(im);
+    const imStr = imAbs === 1 ? "i" : `${imAbs}i`;
+    return `${re} ${sign} ${imStr}`;
+  }
+  return `${roundClean(value)}`;
+}
+
+/**
+ * Converts a Math.js evaluation result (matrix, vector, or scalar)
+ * into a proper KaTeX bmatrix LaTeX string, so results like dagger(Y)
+ * or |0><1| render as an actual bracketed matrix instead of raw
+ * Math.js toString() text.
+ */
+function resultToLatex(result) {
+  // Scalar (plain number or complex number, not wrapped in a matrix)
+  if (typeof result !== "object" || result === null) {
+    return formatEntryLatex(result);
+  }
+  if ("re" in result && "im" in result && !result.toArray) {
+    return formatEntryLatex(result);
+  }
+
+  // Math.js Matrix or plain array — normalize to a 2D array first.
+  let arr;
+  if (result.toArray) {
+    arr = result.toArray();
+  } else if (Array.isArray(result)) {
+    arr = result;
+  } else {
+    // Unknown shape — fall back to plain toString rather than crash.
+    return result.toString ? result.toString() : String(result);
+  }
+
+  // Ensure 2D (a plain 1D array becomes a single row).
+  const rows2D = Array.isArray(arr[0]) ? arr : [arr];
+
+  const bodyRows = rows2D
+    .map((row) => row.map((v) => formatEntryLatex(v)).join(" & "))
+    .join(" \\\\ ");
+
+  return `\\begin{bmatrix} ${bodyRows} \\end{bmatrix}`;
+}
+
 function StaticResultDisplay({ result }) {
-  const latex = result?.toString ? result.toString() : String(result);
+  const latex = resultToLatex(result);
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-4 font-math">
       <InlineMath math={latex} />

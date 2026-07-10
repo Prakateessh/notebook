@@ -1,48 +1,60 @@
 /* src/index.css
  *
- * Global Styles — Quantum Light Glassmorphism Theme
+ * Global Styles — Quantum Light Glassmorphism Theme — TAILWIND V4
  * -----------------------------------------------------------------------
- * Establishes the three-font typographic system and the light-theme
- * canvas color. This file is the FOUNDATION for the rest of the light
- * theme conversion — every other file's color classes (bg-white/80,
- * text-slate-800, etc.) assume this base is in place first.
- *
- * Three fonts, three distinct jobs (per the design doc):
- *   --font-ui:   Geist            -> buttons, labels, error toasts, UI chrome
- *   --font-math: "Source Serif 4" -> KaTeX matrix/vector rendering
- *   --font-code: "JetBrains Mono" -> the code editor, line numbers
- *
- * We load all three via Google Fonts CDN import (simplest, zero build
- * config needed, works immediately in Vite without extra tooling).
+ * FIXED: previous version used Tailwind v3's @tailwind directives and
+ * assumed tailwind.config.js drove theme tokens. This project actually
+ * has Tailwind v4 installed, which uses a single @import and defines
+ * custom theme tokens (fonts, colors) directly in CSS via @theme —
+ * tailwind.config.js is no longer used for this at all in v4.
  */
+
+@import "tailwindcss";
 
 @import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* --- Theme tokens: v4's replacement for tailwind.config.js's
+       theme.extend. Defines font-ui, font-math, font-code utilities,
+       plus the cyan-quantum / purple-quantum color scales, and the
+       backdrop-blur-glass token — all as real Tailwind utilities
+       (bg-cyan-quantum-50, font-math, backdrop-blur-glass, etc. all
+       now work exactly as they did before, just declared differently). --- */
+@theme {
+  --font-ui: 'Geist', ui-sans-serif, system-ui, sans-serif;
+  --font-math: 'Source Serif 4', ui-serif, Georgia, serif;
+  --font-code: 'JetBrains Mono', ui-monospace, 'Cascadia Code', monospace;
+
+  --color-cyan-quantum-50: #e6f5f7;
+  --color-cyan-quantum-100: #c0e5ea;
+  --color-cyan-quantum-400: #00a3b8;
+  --color-cyan-quantum-500: #008299;
+  --color-cyan-quantum-600: #006877;
+  --color-cyan-quantum-700: #00505b;
+
+  --color-purple-quantum-50: #f3e9fc;
+  --color-purple-quantum-100: #e2c9f7;
+  --color-purple-quantum-400: #a05de0;
+  --color-purple-quantum-500: #8f42d8;
+  --color-purple-quantum-600: #8127cf;
+  --color-purple-quantum-700: #661fa3;
+
+  --blur-glass: 12px;
+}
 
 /* --- Base canvas + font application --- */
 @layer base {
   html {
-    /* Crisp, fatigue-free light background per the design doc's
-       "Slate 50 canvas" spec. This is the ABSOLUTE page background;
-       individual glass panels sit on top of this with bg-white/80. */
     background-color: #faf8ff;
   }
 
   body {
     margin: 0;
-    /* Default body text uses the UI font (Geist) — matrices/KaTeX
-       override this locally via font-math where they render. */
     font-family: 'Geist', ui-sans-serif, system-ui, sans-serif;
-    color: #1e293b; /* slate-800 equivalent, comfortable reading contrast on light bg */
+    color: #1e293b;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 
-  /* Custom scrollbar — thin, unobtrusive, fits the clinical/precise
-     aesthetic rather than the browser's chunky default. */
   ::-webkit-scrollbar {
     width: 8px;
     height: 8px;
@@ -51,7 +63,7 @@
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background-color: rgba(100, 116, 139, 0.25); /* slate-500 at low opacity */
+    background-color: rgba(100, 116, 139, 0.25);
     border-radius: 9999px;
   }
   ::-webkit-scrollbar-thumb:hover {
@@ -59,25 +71,14 @@
   }
 }
 
-/* --- Reusable font utility classes (used across components) --- */
-@layer utilities {
-  .font-ui {
-    font-family: 'Geist', ui-sans-serif, system-ui, sans-serif;
-  }
-  .font-math {
-    font-family: 'Source Serif 4', ui-serif, Georgia, serif;
-  }
-  .font-code {
-    font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Code', monospace;
-  }
+/* --- Error squiggly (from CodeEditor.jsx's error state) --- */
+.quantum-error-squiggly {
+  text-decoration: underline wavy #ef4444;
+  text-decoration-skip-ink: none;
+  text-underline-offset: 4px;
 }
 
-/* Appended to src/index.css — supports AmbientBackground.jsx's
-   gradient mesh blobs. Each blob is a large, heavily blurred radial
-   gradient in one of the app's brand colors, independently drifting
-   via a slow keyframe animation (NOT scroll-linked — this is ambient
-   motion, not parallax, per the "no parallax" constraint). */
-
+/* --- Ambient background gradient blobs (from AmbientBackground.jsx) --- */
 .quantum-blob {
   position: absolute;
   border-radius: 9999px;

@@ -1,62 +1,52 @@
 // src/components/controls/PlaybackControls.jsx
 //
-// Playback Controls Compartment — QUANTUM LIGHT GLASSMORPHISM
+// Playback Controls Compartment — STEP-FIRST REDESIGN
 // -----------------------------------------------------------------------
-// MODIFIED FOR LIGHT THEME: per the design doc's exact spec for this
-// compartment — "flat, clean aesthetic, transitioning to a Cyan 50
-// background on hover" — buttons now use bg-cyan-quantum-50 as the
-// hover state instead of the dark version's bg-slate-800/60 hover.
+// CHANGE: step-back/step-forward are now the PRIMARY, large, obvious
+// controls (matching your request for manual left-right navigation
+// through even small steps), and Play/Pause is demoted to a small
+// secondary icon-only toggle off to the side — still available for
+// anyone who wants auto-advance, but no longer the visual focus.
 //
-// The primary Play/Pause button uses cyan-quantum-600 as its resting
-// accent color (matching the doc's "Primary (Cyan 600)" spec for "the
-// Play button" specifically, called out by name in the design doc).
-//
-// All functionality (transport buttons, scrub slider, cellId-scoped
-// selectors/actions) is COMPLETELY UNCHANGED from the notebook-cell
-// version — this file is color/theme changes only.
+// Since generateFrames() in the store now defaults every new
+// evaluation to isPlaying: false, users land on frame 1 paused and
+// naturally reach for the big left/right buttons first.
 
 import { motion } from "framer-motion";
 import { useQuantumStore } from "../../store/useQuantumStore";
 
-// Simple inline icon components — kept local so this file has zero
-// icon-library dependency (avoids adding e.g. lucide-react just for
-// three glyphs). Each is a minimal stroke-based SVG matching the
-// "no skeuomorphism" aesthetic.
+function IconChevronLeft() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="h-5 w-5">
+      <path d="M15 18l-6-6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+function IconChevronRight() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="h-5 w-5">
+      <path d="M9 18l6-6-6-6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
 function IconPlay() {
   return (
-    <svg viewBox="0 0 24 24" fill="currentColor" className="h-3.5 w-3.5">
+    <svg viewBox="0 0 24 24" fill="currentColor" className="h-3 w-3">
       <path d="M8 5v14l11-7z" />
     </svg>
   );
 }
 function IconPause() {
   return (
-    <svg viewBox="0 0 24 24" fill="currentColor" className="h-3.5 w-3.5">
+    <svg viewBox="0 0 24 24" fill="currentColor" className="h-3 w-3">
       <path d="M6 5h4v14H6zM14 5h4v14h-4z" />
-    </svg>
-  );
-}
-function IconStepBack() {
-  return (
-    <svg viewBox="0 0 24 24" fill="currentColor" className="h-3.5 w-3.5">
-      <path d="M6 6h2v12H6zM20 6v12l-10-6z" />
-    </svg>
-  );
-}
-function IconStepForward() {
-  return (
-    <svg viewBox="0 0 24 24" fill="currentColor" className="h-3.5 w-3.5">
-      <path d="M16 6h2v12h-2zM4 6v12l10-6z" />
     </svg>
   );
 }
 
 /**
  * @param {object} props
- * @param {string} props.cellId - which cell in the store this control panel
- *        drives. Every selector and every dispatched action is scoped to
- *        this cellId, so multiple PlaybackControls instances (one per
- *        notebook cell) never interfere with each other.
+ * @param {string} props.cellId - which cell in the store this control panel drives
  */
 export function PlaybackControls({ cellId }) {
   const currentFrameIndex = useQuantumStore(
@@ -80,85 +70,88 @@ export function PlaybackControls({ cellId }) {
 
   return (
     <div className="flex flex-col">
-      <h3 className="mb-2 font-ui text-[10px] uppercase tracking-wider text-slate-400">
-        Playback
-      </h3>
+      <div className="mb-2 flex items-center justify-between">
+        <h3 className="font-ui text-[10px] uppercase tracking-wider text-slate-400">
+          Step
+        </h3>
+        <span className="font-code text-[10px] text-slate-400">
+          {hasFrames ? `${currentFrameIndex + 1} / ${frameCount}` : "—"}
+        </span>
+      </div>
 
-      <div className="flex flex-col gap-2.5">
-        {/* Transport buttons */}
-        <div className="flex items-center gap-1.5">
-          <ControlButton
-            onClick={() => prevFrame(cellId)}
-            disabled={!hasFrames || isAtStart}
-            label="Previous step"
-          >
-            <IconStepBack />
-          </ControlButton>
+      <div className="flex items-center gap-2">
+        {/* --- Primary: big, obvious step buttons --- */}
+        <StepButton
+          onClick={() => prevFrame(cellId)}
+          disabled={!hasFrames || isAtStart}
+          label="Previous step"
+        >
+          <IconChevronLeft />
+        </StepButton>
 
-          <ControlButton
-            onClick={() => togglePlayback(cellId)}
-            disabled={!hasFrames}
-            label={isPlaying ? "Pause" : "Play"}
-            primary
-          >
-            {isPlaying ? <IconPause /> : <IconPlay />}
-          </ControlButton>
+        <StepButton
+          onClick={() => nextFrame(cellId)}
+          disabled={!hasFrames || isAtEnd}
+          label="Next step"
+        >
+          <IconChevronRight />
+        </StepButton>
 
-          <ControlButton
-            onClick={() => nextFrame(cellId)}
-            disabled={!hasFrames || isAtEnd}
-            label="Next step"
-          >
-            <IconStepForward />
-          </ControlButton>
-
-          <span className="ml-auto font-code text-[10px] text-slate-400">
-            {hasFrames ? `${currentFrameIndex + 1}/${frameCount}` : "—"}
-          </span>
-        </div>
-
-        {/* Scrub slider */}
-        <input
-          type="range"
-          min={0}
-          max={Math.max(frameCount - 1, 0)}
-          value={currentFrameIndex}
-          onChange={(e) => setFrameIndex(cellId, Number(e.target.value))}
+        {/* --- Secondary: small play/pause toggle for auto-advance --- */}
+        <button
+          onClick={() => togglePlayback(cellId)}
           disabled={!hasFrames}
+          aria-label={isPlaying ? "Pause auto-advance" : "Auto-advance"}
           className="
-            h-1 w-full cursor-pointer appearance-none rounded-full
-            bg-slate-200 accent-cyan-quantum-600
+            ml-auto flex h-6 w-6 items-center justify-center rounded-md
+            text-slate-400 transition-colors
+            hover:bg-slate-100 hover:text-slate-600
             disabled:cursor-not-allowed disabled:opacity-30
           "
-        />
+        >
+          {isPlaying ? <IconPause /> : <IconPlay />}
+        </button>
       </div>
+
+      {/* --- Scrub slider — still available for jumping directly to
+            any step, complementary to the left/right buttons --- */}
+      <input
+        type="range"
+        min={0}
+        max={Math.max(frameCount - 1, 0)}
+        value={currentFrameIndex}
+        onChange={(e) => setFrameIndex(cellId, Number(e.target.value))}
+        disabled={!hasFrames}
+        className="
+          mt-2.5 h-1 w-full cursor-pointer appearance-none rounded-full
+          bg-slate-200 accent-cyan-quantum-600
+          disabled:cursor-not-allowed disabled:opacity-30
+        "
+      />
     </div>
   );
 }
 
 /**
- * Reusable control button. `primary` gets the doc-specified Cyan 600
- * treatment (the "Play button" color called out explicitly in the
- * design doc). Disabled state mutes opacity rather than hiding, so the
- * transport bar never reflows.
+ * Large, primary step button — this is now the main interaction
+ * surface for moving through the stepper, one frame (however small)
+ * at a time.
  */
-function ControlButton({ onClick, disabled, label, primary, children }) {
+function StepButton({ onClick, disabled, label, children }) {
   return (
     <motion.button
       onClick={onClick}
       disabled={disabled}
       aria-label={label}
-      whileTap={disabled ? {} : { scale: 0.92 }}
-      className={`
-        flex h-8 w-8 items-center justify-center rounded-lg border
+      whileTap={disabled ? {} : { scale: 0.9 }}
+      className="
+        flex h-9 w-9 items-center justify-center rounded-lg border
+        border-cyan-quantum-600/40 bg-cyan-quantum-50 text-cyan-quantum-700
         transition-colors duration-150
-        disabled:cursor-not-allowed disabled:opacity-30
-        ${
-          primary
-            ? "border-cyan-quantum-600/40 bg-cyan-quantum-50 text-cyan-quantum-700 hover:bg-cyan-quantum-100"
-            : "border-slate-200 bg-white/60 text-slate-500 hover:border-cyan-quantum-300 hover:bg-cyan-quantum-50 hover:text-cyan-quantum-700"
-        }
-      `}
+        hover:bg-cyan-quantum-100
+        disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50
+        disabled:text-slate-300
+      "
     >
       {children}
     </motion.button>

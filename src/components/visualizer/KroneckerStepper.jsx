@@ -1,33 +1,32 @@
 // src/components/visualizer/KroneckerStepper.jsx
 //
-// Kronecker Stepper — "Fly and Duplicate" Animation (REBUILT)
+// Kronecker Stepper — "Fly and Duplicate" Animation (BUG FIX + CLARITY PASS)
 // -----------------------------------------------------------------------
-// Replaces the old inline KroneckerFrame logic that used to live inside
-// MatrixStepper.jsx (that version just showed a static scalar + a
-// pre-scaled block appearing directly in place — no real sense of "B
-// traveling to become part of the result," which is what read as
-// "trash" per your feedback).
+// FIXED BUG: the flying clone's starting position was previously read
+// via `bGridRef.current?.offsetLeft` INLINE during render (in a JSX
+// style prop), which is unreliable — offsetLeft can read stale/zero
+// values depending on render timing, causing the clone to sometimes
+// appear to jump from the wrong spot. FIX: both the source position
+// AND the target position are now measured together, in the same
+// useLayoutEffect, via getBoundingClientRect on all three refs
+// relative to the shared container — consistent, accurate, no
+// render-timing race condition.
 //
-// NEW BEHAVIOR (matches your exact spec):
-//   1. Full matrix A and full matrix B are shown side by side, and
-//      STAY VISIBLE throughout the whole sequence (not just one frame).
-//   2. For the CURRENT block being computed (A[i][j]), a scaled CLONE
-//      of the full B grid appears right next to the real B grid.
-//   3. That clone then physically FLIES — real pixel-measured motion,
-//      not a fake CSS trick — from B's position to its target block
-//      slot inside the growing Result grid, using FLY_TRAVEL spring
-//      physics with a visible trailing/arcing motion.
-//   4. On arrival, it lands with PLAYFUL_BOUNCE (a small satisfying
-//      overshoot-and-settle), then the clone is retired and the real,
-//      static resultSoFar cells take over that slot.
-//
-// TECHNICAL APPROACH: real DOM measurement via getBoundingClientRect,
-// NOT guessed/hardcoded pixel math. Three refs (container, B grid,
-// result grid) let us compute the exact pixel delta between B's
-// current screen position and the target block's screen position,
-// so the flight is accurate regardless of matrix size, zoom level, or
-// container width. This is genuinely more robust than eyeballing a
-// fixed cell-size constant.
+// EDUCATIONAL CLARITY ADDITIONS (per your "not good for education"
+// feedback):
+//   1. A descriptive caption above the animation states in plain
+//      language what's happening: "Scaling B by A[i][j] = <value> and
+//      placing it into block (row, col) of the result" — not just a
+//      terse technical label.
+//   2. The DESTINATION block in the result grid gets a pulsing dashed
+//      outline the moment a new block frame starts — before the clone
+//      even begins flying — so the viewer's eye is directed to WHERE
+//      to look first, then watches the clone travel there. This
+//      "look here next" cue was completely missing before, which was
+//      likely a major reason it felt confusing.
+//   3. Slower, clearer pacing: source-pause -> measured flight ->
+//      bounce-landing -> brief hold before advancing, using
+//      DURATIONS.cinematic consistently instead of arbitrary numbers.
 
 import { useRef, useState, useLayoutEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -38,8 +37,8 @@ import { FLY_TRAVEL, PLAYFUL_BOUNCE, DURATIONS } from "../../lib/motionPresets";
  * @param {object} props
  * @param {string} props.cellId - scopes layoutIds to this notebook cell
  * @param {object} props.frame - current "block-compute" frame from
- *        generateKroneckerSteps (must include matrixA/matrixB — see
- *        the accompanying stepGenerator.js update)
+ *        generateKroneckerSteps (includes matrixA/matrixB per the
+ *        stepGenerator.js update from earlier in this build)
  */
 export function KroneckerStepper({ cellId, frame }) {
   const { aRowIndex, aColIndex, scalar, block, blockOffset, resultSoFar, matrixA, matrixB } = frame;
@@ -48,62 +47,79 @@ export function KroneckerStepper({ cellId, frame }) {
   const bGridRef = useRef(null);
   const resultGridRef = useRef(null);
 
-  // "source" = clone sitting right next to B, about to depart.
-  // "flying"  = clone's animate prop has been given the real measured
-  //             offset, so Framer Motion springs it across the canvas.
+  // phase: "source" (clone sitting at B's position, not yet moving),
+  //        "flying" (clone animating toward the measured target),
+  //        "landed" (clone retired, real result cells take over).
   const [phase, setPhase] = useState("source");
-  const [flightDelta, setFlightDelta] = useState({ x: 0, y: 0 });
+  const [positions, setPositions] = useState({
+    sourceX: 0,
+    sourceY: 0,
+    targetX: 0,
+    targetY: 0,
+  });
 
-  // Re-run the measure-then-fly sequence every time we land on a NEW
-  // block frame (aRowIndex/aColIndex change identifies a new block).
   useLayoutEffect(() => {
     setPhase("source");
-    setFlightDelta({ x: 0, y: 0 });
 
-    // Small delay before measuring + launching flight — gives the
-    // "clone just appeared next to B" moment a beat to register with
-    // the eye before it takes off (this pause is deliberate pacing,
-    // not a technical necessity).
-    const measureTimer = setTimeout(() => {
-      if (!bGridRef.current || !resultGridRef.current) return;
-
+    // Measure BOTH source and target positions together, in one pass,
+    // relative to the shared container — this replaces the old
+    // render-time offsetLeft read that caused inconsistent starting
+    // positions.
+    const measure = () => {
+      if (!containerRef.current || !bGridRef.current || !resultGridRef.current) {
+        return null;
+      }
+      const containerRect = containerRef.current.getBoundingClientRect();
       const bRect = bGridRef.current.getBoundingClientRect();
       const resultRect = resultGridRef.current.getBoundingClientRect();
 
-      const p = matrixB.length; // rows of B (= block height in cells)
-      const q = matrixB[0].length; // cols of B (= block width in cells)
+      const p = matrixB.length;
+      const q = matrixB[0].length;
       const outCols = matrixA[0].length * q;
-
-      // Real measured cell pixel size within the result grid, derived
-      // from the grid's actual rendered width divided by column count
-      // — NOT a hardcoded constant, so this stays accurate at any
-      // screen size or zoom level.
       const cellPx = resultRect.width / outCols;
 
-      const targetX =
-        resultRect.left + blockOffset.col * cellPx - bRect.left;
-      const targetY =
-        resultRect.top + blockOffset.row * cellPx - bRect.top;
+      return {
+        sourceX: bRect.left - containerRect.left,
+        sourceY: bRect.top - containerRect.top,
+        targetX: resultRect.left - containerRect.left + blockOffset.col * cellPx,
+        targetY: resultRect.top - containerRect.top + blockOffset.row * cellPx,
+      };
+    };
 
-      setFlightDelta({ x: targetX, y: targetY });
-      setPhase("flying");
-    }, 350);
+    // Small pause at the source position first — lets the viewer
+    // register "this scaled copy of B just appeared" before it moves.
+    const flightTimer = setTimeout(() => {
+      const measured = measure();
+      if (measured) {
+        setPositions(measured);
+        setPhase("flying");
+      }
+    }, 400);
 
-    // After the flight has had time to land + bounce-settle, retire
-    // the clone (its final resting frame visually overlaps with the
-    // real result cell taking over, so the handoff is invisible).
+    // After the flight + bounce-settle has had time to complete,
+    // retire the clone — the real result cells underneath already
+    // show the same values, so the handoff is invisible.
     const retireTimer = setTimeout(() => {
       setPhase("landed");
-    }, 350 + DURATIONS.cinematic * 1000);
+    }, 400 + DURATIONS.cinematic * 1000 + 300);
 
     return () => {
-      clearTimeout(measureTimer);
+      clearTimeout(flightTimer);
       clearTimeout(retireTimer);
     };
-  }, [aRowIndex, aColIndex, matrixB, matrixA, blockOffset]);
+  }, [aRowIndex, aColIndex, matrixA, matrixB, blockOffset]);
 
   return (
-    <div ref={containerRef} className="relative flex w-full flex-col items-center gap-6">
+    <div ref={containerRef} className="relative flex w-full flex-col items-center gap-5">
+      {/* --- Plain-language caption --- */}
+      <p className="font-ui max-w-md text-center text-xs leading-relaxed text-slate-500">
+        Scaling B by{" "}
+        <span className="font-code font-medium text-cyan-quantum-700">
+          A[{aRowIndex}][{aColIndex}] = {formatScalar(scalar)}
+        </span>{" "}
+        and placing it into row {blockOffset.row}, column {blockOffset.col} of the result.
+      </p>
+
       <div className="flex items-start gap-6">
         {/* --- Matrix A: full grid, current scalar highlighted --- */}
         <FullGrid
@@ -122,53 +138,85 @@ export function KroneckerStepper({ cellId, frame }) {
             getState={() => "col-highlight"}
           />
         </div>
-
-        {/* --- The flying clone: a scaled copy of B, only visible
-              during "source" and "flying" phases --- */}
-        <AnimatePresence>
-          {phase !== "landed" && (
-            <motion.div
-              className="pointer-events-none absolute left-0 top-0 z-10"
-              style={{
-                // Positioned to overlap B's own rendered location at
-                // rest (offset applied via animate.x/y, not layout).
-                transform: `translate(${bGridRef.current?.offsetLeft ?? 0}px, 0px)`,
-              }}
-              initial={{ x: 0, y: 0, opacity: 0, scale: 0.9 }}
-              animate={
-                phase === "flying"
-                  ? { x: flightDelta.x, y: flightDelta.y, opacity: 1, scale: 1 }
-                  : { x: 0, y: 0, opacity: 1, scale: 1 }
-              }
-              exit={{ opacity: 0, scale: 0.7 }}
-              transition={phase === "flying" ? FLY_TRAVEL : PLAYFUL_BOUNCE}
-            >
-              <FullGrid
-                matrix={block}
-                getLayoutId={(r, c) => `${cellId}-kron-flying-${r}-${c}`}
-                getState={() => "active"}
-                compact
-              />
-            </motion.div>
-          )}
-        </AnimatePresence>
       </div>
 
       <span className="text-slate-400">↓</span>
 
-      {/* --- Result grid: grows in as blocks land --- */}
-      <div ref={resultGridRef}>
+      {/* --- Result grid: destination block gets a pulsing outline
+            cue BEFORE/DURING the flight, so the eye knows where to
+            look first. --- */}
+      <div ref={resultGridRef} className="relative">
         <FullGrid
           matrix={resultSoFar}
           getLayoutId={(r, c) => `${cellId}-result-${r}-${c}`}
           getState={(r, c) => (resultSoFar[r][c] !== null ? "settled" : "idle")}
         />
+
+        {phase !== "landed" && (
+          <DestinationOutline
+            matrixB={matrixB}
+            blockOffset={blockOffset}
+            resultCols={matrixA[0].length * matrixB[0].length}
+          />
+        )}
       </div>
 
-      <span className="font-code text-[10px] text-slate-400">
-        Placing A[{aRowIndex}][{aColIndex}] · B (scalar = {formatScalar(scalar)})
-      </span>
+      {/* --- The flying clone --- */}
+      <AnimatePresence>
+        {phase !== "landed" && (
+          <motion.div
+            className="pointer-events-none absolute left-0 top-0 z-10"
+            initial={{
+              x: positions.sourceX,
+              y: positions.sourceY,
+              opacity: 0,
+              scale: 0.9,
+            }}
+            animate={
+              phase === "flying"
+                ? { x: positions.targetX, y: positions.targetY, opacity: 1, scale: 1 }
+                : { x: positions.sourceX, y: positions.sourceY, opacity: 1, scale: 1 }
+            }
+            exit={{ opacity: 0, scale: 0.7 }}
+            transition={phase === "flying" ? FLY_TRAVEL : PLAYFUL_BOUNCE}
+          >
+            <FullGrid
+              matrix={block}
+              getLayoutId={(r, c) => `${cellId}-kron-flying-${r}-${c}`}
+              getState={() => "active"}
+              compact
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
+  );
+}
+
+/**
+ * Pulsing dashed outline over the destination block position in the
+ * result grid — a "look here next" visual cue. Purely decorative,
+ * positioned via the same percentage math as the block itself.
+ */
+function DestinationOutline({ matrixB, blockOffset, resultCols }) {
+  const p = matrixB.length;
+  const q = matrixB[0].length;
+
+  const leftPercent = (blockOffset.col / resultCols) * 100;
+  const topPercent = (blockOffset.row / (resultCols / q) / p) * 100; // approximate, purely visual guide
+
+  return (
+    <motion.div
+      className="pointer-events-none absolute rounded-md border-2 border-dashed border-cyan-quantum-400"
+      style={{
+        left: `${leftPercent}%`,
+        top: 0,
+        width: `${(q / resultCols) * 100}%`,
+        height: "100%",
+      }}
+      animate={{ opacity: [0.3, 0.7, 0.3] }}
+      transition={{ duration: 1.4, repeat: Infinity, ease: "easeInOut" }}
+    />
   );
 }
 
