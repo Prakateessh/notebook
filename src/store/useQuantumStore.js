@@ -1,10 +1,15 @@
 // src/store/useQuantumStore.js
 //
-// Central Zustand store for the Quantum Math Scratchpad — SPLIT‑VIEW EDITION.
+// Central Zustand store – symbolic matrices + evaluation logs
 // -----------------------------------------------------------------------
-// NEW: Smarter error messages – common Math.js errors are replaced with
-//      friendly quantum‑specific hints.
-// NEW: moveCell action – swaps cell positions in cellOrder for reordering.
+// NEW: Every evaluation (success or failure) is recorded in `cell.logs`.
+//      Logs are exported/imported with the notebook.
+// FIX: Symbolic path now also detects variables that already hold symbolic
+//      matrices (like A, B from `let A = matrix(2,2,"a")`), so `A * B` and
+//      `kron(A,B)` no longer fall through to numeric evaluation and throw.
+// FIX: Token splitting now includes commas so function arguments (e.g. `kron(A,B)`)
+//      are correctly recognised as symbolic variables.
+// FIX: Dirac preprocessing errors are now caught and turned into friendly messages.
 
 import { create } from "zustand";
 import { create as createMathInstance, all } from "mathjs";
@@ -15,18 +20,39 @@ import {
   generateKroneckerSteps,
   generateGateExplanationSteps,
 } from "../lib/stepGenerator";
+import {
+  sym,
+  symbolicMultiply,
+  symbolicAdd,
+  SymbolicMatrix,
+  SymbolicScalar,
+  symbolicMatrixFromArray,
+  createSymbolicMatrix,
+} from "../lib/symbolicEngine";
 
 const math = createMathInstance(all);
 injectQuantumStdlib(math);
 
-const mathOps = {
-  multiply: math.multiply,
-  add: math.add,
-};
+const numericOps = { multiply: math.multiply, add: math.add };
+const symbolicOps = { multiply: symbolicMultiply, add: symbolicAdd };
+
+// ---- helper: check if any token is a declared symbol ----
+function hasDeclaredSymbols(text, symbols) {
+  const tokens = text.split(/[\s*+(),]+/);   // <-- added comma
+  return tokens.some(t => symbols.has(t));
+}
+
+// ---- helper: check if any token is a variable holding a SymbolicMatrix ----
+function hasSymbolicVariable(text, variables) {
+  const tokens = text.split(/[\s*+(),]+/);   // <-- added comma
+  return tokens.some(t => variables[t] instanceof SymbolicMatrix);
+}
 
 function detectOperationType(rawInput) {
   const trimmed = rawInput.trim();
   if (/^\s*let\s+[a-zA-Z_]\w*\s*=/.test(trimmed)) return "let";
+  if (/^\s*symbols\b/.test(trimmed)) return "symbols";
+  if (/^\s*matrix\s*\(/.test(trimmed)) return "matrix";
   if (/^\s*kron\s*\(/.test(trimmed)) return "kronecker";
   if (/\*/.test(trimmed)) return "multiplication";
   return "gate";
@@ -35,9 +61,7 @@ function detectOperationType(rawInput) {
 function isGateMatrix(result) {
   if (!result || typeof result.toArray !== "function") return false;
   const arr = result.toArray();
-  if (!Array.isArray(arr) || arr.length === 0) return false;
-  if (!Array.isArray(arr[0])) return false;
-  return arr.length >= 2 && arr[0].length >= 2;
+  return Array.isArray(arr) && arr.length >= 2 && Array.isArray(arr[0]) && arr[0].length >= 2;
 }
 
 function buildWholeCellExpression(rawText) {
@@ -54,6 +78,7 @@ function createEmptyCell(type = "code") {
     editor: { rawInput: "", debounceTimer: null },
     evaluation: { result: null, error: null, operationType: "unknown" },
     stepper: { frames: [], currentFrameIndex: 0, isPlaying: false },
+    logs: [],
   };
 }
 
@@ -61,36 +86,80 @@ function generateCellId() {
   return `cell-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-// ---- smarter error messages ----
-function friendlyError(originalError, expression) {
-  const msg = originalError.message || originalError.toString();
-
-  // Dimension mismatch
+function friendlyError(err, expr) {
+  const msg = (err && err.message) || (err && err.toString()) || String(err);
   if (/dimension/i.test(msg) || /columns/i.test(msg)) {
-    return "Gate and state dimensions don't match. For example, a 4×4 gate needs a 4‑component state (like |10⟩ for CNOT).";
+    return "Gate and state dimensions don't match.";
   }
-
-  // Unknown symbol (often a gate without *)
-  if (/Undefined symbol/i.test(msg)) {
-    const match = msg.match(/Undefined symbol\s+(\w+)/i);
-    if (match) {
-      const sym = match[1];
-      const known = ["I","X","Y","Z","H","S","T","CNOT","SWAP","CZ","CY","CH","CCNOT",
-                     "Rx","Ry","Rz","kron","dagger","prob","expect","variance",
-                     "commutator","anticommutator","isUnitary","controlled"];
-      if (known.includes(sym)) {
-        return `"${sym}" is a quantum gate or function. Did you forget to multiply with '*'? Example: ${sym} * |0>`;
-      }
-    }
-  }
-
-  // Unexpected end (often missing closing bracket/paren)
-  if (/Unexpected end/i.test(msg)) {
-    return "Expression seems incomplete. Check for missing parentheses or brackets.";
-  }
-
-  // Generic fallback
+  if (/Undefined symbol/i.test(msg)) return msg;
+  if (/Unexpected end/i.test(msg)) return "Expression seems incomplete.";
   return msg;
+}
+
+// ---- Matrix literal parser ----
+function parseMatrixLiteral(text) {
+  const match = text.match(/^\[\[(.+?)\]\]$/);
+  if (!match) return null;
+  const inner = match[1];
+  const rows = inner.split("],[").map(s => s.replace(/^\[/, "").replace(/\]$/, ""));
+  const grid = rows.map(row => row.split(",").map(s => s.trim()));
+  const cols = grid[0].length;
+  return grid.every(row => row.length === cols) ? grid : null;
+}
+
+// ---- matrix(…) call parser ----
+function parseMatrixCall(text) {
+  const match = text.match(
+    /^matrix\s*\(\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*"([a-zA-Z])"\s*(?:,\s*"col"\s*)?\s*)?\s*\)$/
+  );
+  if (!match) return null;
+  const rows = parseInt(match[1], 10);
+  const cols = parseInt(match[2], 10);
+  const base = match[3] || "a";
+  const colMode = text.includes('"col"');
+  const symMat = createSymbolicMatrix(rows, cols, base, colMode);
+  const allNames = [];
+  symMat.grid.forEach(row => row.forEach(cell => {
+    if (cell.type === "symbol") allNames.push(cell.name);
+  }));
+  return { matrix: symMat, symbols: allNames };
+}
+
+function resolveOperand(str, variables, symbols) {
+  const s = str.trim();
+  if (variables[s] && variables[s] instanceof SymbolicMatrix) return variables[s];
+  const lit = parseMatrixLiteral(s);
+  if (lit) return buildSymbolicMatrix(lit, symbols);
+  const call = parseMatrixCall(s);
+  if (call) {
+    call.symbols.forEach(n => symbols.add(n));
+    return call.matrix;
+  }
+  throw new Error(`"${s}" is not a symbolic matrix.`);
+}
+
+function buildSymbolicMatrix(grid, symbols) {
+  return symbolicMatrixFromArray(grid.map(row => row.map(cell => stringToNode(cell, symbols))));
+}
+
+function stringToNode(str, symbols) {
+  const t = str.trim();
+  if (/^-?\d+(\.\d+)?$/.test(t)) return sym(Number(t));
+  if (symbols.has(t)) return sym(t);
+  throw new Error(`Unknown symbol "${t}". Declare it first.`);
+}
+
+// ---- helper to push a log entry ----
+function pushLog(set, get, cellId, entry) {
+  set(state => ({
+    cells: {
+      ...state.cells,
+      [cellId]: {
+        ...state.cells[cellId],
+        logs: [...(state.cells[cellId]?.logs || []), entry],
+      },
+    },
+  }));
 }
 
 const FIRST_CELL_ID = generateCellId();
@@ -99,14 +168,20 @@ export const useQuantumStore = create((set, get) => ({
   cellOrder: [FIRST_CELL_ID],
   cells: { [FIRST_CELL_ID]: createEmptyCell() },
   activeCellId: FIRST_CELL_ID,
-  setActiveCell: (cellId) => set(() => ({ activeCellId: cellId })),
+  setActiveCell: (id) => set(() => ({ activeCellId: id })),
   hasSeenIntro: false,
   markIntroSeen: () => set(() => ({ hasSeenIntro: true })),
   variables: {},
+  symbols: new Set(),
+
+  declareSymbols: (str) => {
+    const names = str.split(/[\s,]+/).filter(Boolean);
+    set(state => ({ symbols: new Set([...state.symbols, ...names]) }));
+  },
 
   addCell: (type = "code") => {
     const newId = generateCellId();
-    set((state) => ({
+    set(state => ({
       cellOrder: [...state.cellOrder, newId],
       cells: { ...state.cells, [newId]: createEmptyCell(type) },
     }));
@@ -114,10 +189,10 @@ export const useQuantumStore = create((set, get) => ({
   },
 
   removeCell: (cellId) => {
-    set((state) => {
+    set(state => {
       if (state.cellOrder.length <= 1) return state;
       const { [cellId]: _removed, ...remainingCells } = state.cells;
-      const remainingOrder = state.cellOrder.filter((id) => id !== cellId);
+      const remainingOrder = state.cellOrder.filter(id => id !== cellId);
       const nextActiveCellId =
         state.activeCellId === cellId ? remainingOrder[0] : state.activeCellId;
       return {
@@ -128,13 +203,11 @@ export const useQuantumStore = create((set, get) => ({
     });
   },
 
-  // ----- cell reordering (used by drag-and-drop or up/down buttons) -----
   moveCell: (cellId, newIndex) => {
-    set((state) => {
+    set(state => {
       const oldIndex = state.cellOrder.indexOf(cellId);
       if (oldIndex === -1 || oldIndex === newIndex) return state;
       const newOrder = [...state.cellOrder];
-      // Remove from old position and insert at new position
       newOrder.splice(oldIndex, 1);
       newOrder.splice(newIndex, 0, cellId);
       return { cellOrder: newOrder };
@@ -142,7 +215,7 @@ export const useQuantumStore = create((set, get) => ({
   },
 
   setRawInput: (cellId, text) => {
-    set((state) => ({
+    set(state => ({
       cells: {
         ...state.cells,
         [cellId]: {
@@ -153,12 +226,12 @@ export const useQuantumStore = create((set, get) => ({
     }));
   },
 
-  scheduleEvaluation: (cellId, text, delayMs = 500) => {
+  scheduleEvaluation: (cellId, text, delay = 500) => {
     const cell = get().cells[cellId];
     if (!cell) return;
     if (cell.editor.debounceTimer) clearTimeout(cell.editor.debounceTimer);
-    const timer = setTimeout(() => get().evaluateInput(cellId, text), delayMs);
-    set((state) => ({
+    const timer = setTimeout(() => get().evaluateInput(cellId, text), delay);
+    set(state => ({
       cells: {
         ...state.cells,
         [cellId]: {
@@ -180,9 +253,9 @@ export const useQuantumStore = create((set, get) => ({
     const cell = get().cells[cellId];
     if (!cell || cell.type !== "code") return;
 
-    const expression = buildWholeCellExpression(rawText || "");
-    if (!expression) {
-      set((state) => ({
+    const expr = buildWholeCellExpression(rawText || "");
+    if (!expr) {
+      set(state => ({
         cells: {
           ...state.cells,
           [cellId]: {
@@ -196,17 +269,146 @@ export const useQuantumStore = create((set, get) => ({
     }
 
     try {
-      let operationType = detectOperationType(expression);
+      const vars = get().variables;
+      const syms = get().symbols;
 
-      if (operationType === "let") {
-        const match = expression.match(/^\s*let\s+([a-zA-Z_]\w*)\s*=\s*(.+)$/);
-        if (!match) throw new Error("Invalid variable definition.");
+      // ---- 0. If the whole expression is a variable that holds a symbolic matrix, display it ----
+      if (/^[a-zA-Z_]\w*$/.test(expr) && vars[expr] instanceof SymbolicMatrix) {
+        set(state => ({
+          cells: {
+            ...state.cells,
+            [cellId]: {
+              ...state.cells[cellId],
+              evaluation: { result: vars[expr], error: null, operationType: "symbolic" },
+              stepper: { frames: [], currentFrameIndex: 0, isPlaying: false },
+            },
+          },
+        }));
+        pushLog(set, get, cellId, {
+          timestamp: new Date().toISOString(),
+          input: rawText,
+          result: "displayed symbolic matrix",
+          error: null,
+        });
+        return;
+      }
+
+      // ---- 1. expressions that MUST NOT touch Math.js ----
+      const hasMatrixCall = /matrix\s*\(/.test(expr);
+      const hasSymbol = hasDeclaredSymbols(expr, syms);
+      const hasSymVar = hasSymbolicVariable(expr, vars);   // detects variables holding symbolic matrices
+
+      // ---- 2. symbols declaration ----
+      if (/^\s*symbols\b/.test(expr)) {
+        const decl = expr.replace(/^symbols\s*/, "").trim();
+        get().declareSymbols(decl);
+        set(state => ({
+          cells: {
+            ...state.cells,
+            [cellId]: {
+              ...state.cells[cellId],
+              evaluation: {
+                result: { message: `Symbols declared: ${decl}` },
+                error: null,
+                operationType: "symbols",
+              },
+              stepper: { frames: [], currentFrameIndex: 0, isPlaying: false },
+            },
+          },
+        }));
+        pushLog(set, get, cellId, {
+          timestamp: new Date().toISOString(),
+          input: rawText,
+          result: `Symbols declared: ${decl}`,
+          error: null,
+        });
+        return;
+      }
+
+      // ---- 3. standalone matrix() ----
+      if (/^\s*matrix\s*\(/.test(expr)) {
+        const call = parseMatrixCall(expr);
+        if (!call) throw new Error("Invalid matrix() syntax.");
+        get().declareSymbols(call.symbols.join(","));
+        set(state => ({
+          cells: {
+            ...state.cells,
+            [cellId]: {
+              ...state.cells[cellId],
+              evaluation: { result: call.matrix, error: null, operationType: "matrix" },
+              stepper: { frames: [], currentFrameIndex: 0, isPlaying: false },
+            },
+          },
+        }));
+        pushLog(set, get, cellId, {
+          timestamp: new Date().toISOString(),
+          input: rawText,
+          result: "created symbolic matrix",
+          error: null,
+        });
+        return;
+      }
+
+      // ---- 4. let (variable definition) ----
+      if (/^\s*let\s+[a-zA-Z_]\w*\s*=/.test(expr)) {
+        const match = expr.match(/^\s*let\s+([a-zA-Z_]\w*)\s*=\s*(.+)$/);
+        if (!match) throw new Error("Use 'let name = expr'.");
         const varName = match[1];
-        const rhsExpr = match[2].trim();
-        const preprocessedRHS = preprocessDirac(rhsExpr);
-        const scope = { ...get().variables };
-        const value = math.evaluate(preprocessedRHS, scope);
-        set((state) => ({
+        const rhs = match[2].trim();
+
+        // RHS is a matrix() call?
+        const call = parseMatrixCall(rhs);
+        if (call) {
+          get().declareSymbols(call.symbols.join(","));
+          set(state => ({
+            variables: { ...state.variables, [varName]: call.matrix },
+            cells: {
+              ...state.cells,
+              [cellId]: {
+                ...state.cells[cellId],
+                evaluation: { result: call.matrix, error: null, operationType: "let" },
+                stepper: { frames: [], currentFrameIndex: 0, isPlaying: false },
+              },
+            },
+          }));
+          pushLog(set, get, cellId, {
+            timestamp: new Date().toISOString(),
+            input: rawText,
+            result: `stored as ${varName}`,
+            error: null,
+          });
+          return;
+        }
+
+        // RHS is a matrix literal?
+        const lit = parseMatrixLiteral(rhs);
+        if (lit) {
+          const symMat = buildSymbolicMatrix(lit, syms);
+          set(state => ({
+            variables: { ...state.variables, [varName]: symMat },
+            cells: {
+              ...state.cells,
+              [cellId]: {
+                ...state.cells[cellId],
+                evaluation: { result: symMat, error: null, operationType: "let" },
+                stepper: { frames: [], currentFrameIndex: 0, isPlaying: false },
+              },
+            },
+          }));
+          pushLog(set, get, cellId, {
+            timestamp: new Date().toISOString(),
+            input: rawText,
+            result: `stored as ${varName}`,
+            error: null,
+          });
+          return;
+        }
+
+        // numeric let
+        const preprocessed = preprocessDirac(rhs);
+        const scope = { ...vars };
+        const value = math.evaluate(preprocessed, scope);
+        set(state => ({
           variables: { ...state.variables, [varName]: value },
           cells: {
             ...state.cells,
@@ -217,32 +419,116 @@ export const useQuantumStore = create((set, get) => ({
             },
           },
         }));
+        pushLog(set, get, cellId, {
+          timestamp: new Date().toISOString(),
+          input: rawText,
+          result: `stored as ${varName}`,
+          error: null,
+        });
         return;
       }
 
-      const preprocessed = preprocessDirac(expression);
-      const scope = { ...get().variables };
-      const result = math.evaluate(preprocessed, scope);
+      // ---- 5. symbolic expressions (now also includes variables holding symbolic matrices) ----
+      if (hasMatrixCall || hasSymbol || hasSymVar) {
+        // 5a. multiplication
+        if (/\*/.test(expr)) {
+          const parts = expr.split("*").map(s => s.trim());
+          if (parts.length !== 2) throw new Error("Symbolic multiplication requires exactly two operands.");
+          const A = resolveOperand(parts[0], vars, syms);
+          const B = resolveOperand(parts[1], vars, syms);
+          if (A instanceof SymbolicMatrix && B instanceof SymbolicMatrix) {
+            const frames = generateMultiplicationSteps(A.grid, B.grid, symbolicOps)
+              .map(f => ({ ...f, chainStep: 0 }));
+            set(state => ({
+              cells: {
+                ...state.cells,
+                [cellId]: {
+                  ...state.cells[cellId],
+                  evaluation: { result: null, error: null, operationType: "multiplication" },
+                  stepper: { frames, currentFrameIndex: 0, isPlaying: false },
+                },
+              },
+            }));
+            pushLog(set, get, cellId, {
+              timestamp: new Date().toISOString(),
+              input: rawText,
+              result: "symbolic multiplication (see stepper)",
+              error: null,
+            });
+            return;
+          }
+          throw new Error("Symbolic multiplication supports only matrix × matrix.");
+        }
 
-      if (operationType === "gate" && !isGateMatrix(result)) {
-        operationType = "unknown";
+        // 5b. Kronecker
+        const kronMatch = expr.match(/^kron\(([^,]+),(.+)\)$/);
+        if (kronMatch) {
+          const A = resolveOperand(kronMatch[1].trim(), vars, syms);
+          const B = resolveOperand(kronMatch[2].trim(), vars, syms);
+          if (A instanceof SymbolicMatrix && B instanceof SymbolicMatrix) {
+            const frames = generateKroneckerSteps(A.grid, B.grid, symbolicOps);
+            set(state => ({
+              cells: {
+                ...state.cells,
+                [cellId]: {
+                  ...state.cells[cellId],
+                  evaluation: { result: null, error: null, operationType: "kronecker" },
+                  stepper: { frames, currentFrameIndex: 0, isPlaying: false },
+                },
+              },
+            }));
+            pushLog(set, get, cellId, {
+              timestamp: new Date().toISOString(),
+              input: rawText,
+              result: "symbolic Kronecker (see stepper)",
+              error: null,
+            });
+            return;
+          }
+          throw new Error("Symbolic Kronecker requires two matrices.");
+        }
+
+        throw new Error("Symbolic expressions can only be multiplication or Kronecker product.");
       }
 
-      set((state) => ({
+      // ---- 6. Numeric evaluation (Math.js) ----
+      // NEW: wrap preprocessing in try/catch to give friendly errors for malformed Dirac notation
+      let preprocessed;
+      try {
+        preprocessed = preprocessDirac(expr);
+      } catch (preErr) {
+        // Dirac preprocessing failed – turn it into a friendly error
+        throw new Error("Invalid Dirac notation. Make sure you use |0>, <0|, |10>, etc. correctly.");
+      }
+
+      const scope = { ...vars };
+      const result = math.evaluate(preprocessed, scope);
+      let opType = detectOperationType(expr);
+      if (opType === "gate" && !isGateMatrix(result)) opType = "unknown";
+
+      set(state => ({
         cells: {
           ...state.cells,
           [cellId]: {
             ...state.cells[cellId],
-            evaluation: { result, error: null, operationType },
+            evaluation: { result, error: null, operationType: opType },
           },
         },
       }));
 
-      get().generateFrames(cellId, preprocessed, operationType, result);
+      if (opType === "multiplication" || opType === "kronecker" || opType === "gate") {
+        get().generateFrames(cellId, preprocessed, opType, result);
+      }
+
+      pushLog(set, get, cellId, {
+        timestamp: new Date().toISOString(),
+        input: rawText,
+        result: "evaluated",
+        error: null,
+      });
     } catch (err) {
-      // ---- friendly error ----
-      const friendly = friendlyError(err, expression);
-      set((state) => ({
+      const friendly = friendlyError(err, expr);
+      set(state => ({
         cells: {
           ...state.cells,
           [cellId]: {
@@ -252,52 +538,57 @@ export const useQuantumStore = create((set, get) => ({
           },
         },
       }));
+      pushLog(set, get, cellId, {
+        timestamp: new Date().toISOString(),
+        input: rawText,
+        result: null,
+        error: friendly,
+      });
     }
   },
 
+  clearLogs: (cellId) => {
+    set(state => ({
+      cells: {
+        ...state.cells,
+        [cellId]: { ...state.cells[cellId], logs: [] },
+      },
+    }));
+  },
+
   generateFrames: (cellId, preprocessedInput, operationType, result) => {
+    // unchanged numeric frame generation
     try {
       let frames = [];
-
       if (operationType === "kronecker") {
         const match = preprocessedInput.match(/kron\(([^,]+),(.+)\)$/);
         if (match) {
-          const evalA = math.evaluate(match[1], { ...get().variables });
-          const evalB = math.evaluate(match[2], { ...get().variables });
-          const A = evalA.toArray ? evalA.toArray() : evalA;
-          const B = evalB.toArray ? evalB.toArray() : evalB;
-          frames = generateKroneckerSteps(A, B, mathOps);
+          const A = math.evaluate(match[1], { ...get().variables }).toArray();
+          const B = math.evaluate(match[2], { ...get().variables }).toArray();
+          frames = generateKroneckerSteps(A, B, numericOps);
         }
       } else if (operationType === "multiplication") {
-        const parts = preprocessedInput.split("*");
+        const parts = preprocessedInput.split("*").map(s => s.trim());
         if (parts.length === 2) {
-          const evalA = math.evaluate(parts[0], { ...get().variables });
-          const evalB = math.evaluate(parts[1], { ...get().variables });
-          const A = evalA.toArray ? evalA.toArray() : evalA;
-          const B = evalB.toArray ? evalB.toArray() : evalB;
-          frames = generateMultiplicationSteps(A, B, mathOps);
-          frames = frames.map(f => ({ ...f, chainStep: 0 }));
+          const A = math.evaluate(parts[0], { ...get().variables }).toArray();
+          const B = math.evaluate(parts[1], { ...get().variables }).toArray();
+          frames = generateMultiplicationSteps(A, B, numericOps).map(f => ({ ...f, chainStep: 0 }));
         } else {
-          const operands = parts.map(p => math.evaluate(p, { ...get().variables }));
-          let currentResult = operands[0];
-          for (let i = 1; i < operands.length; i++) {
-            const nextOperand = operands[i];
-            const A = currentResult.toArray ? currentResult.toArray() : currentResult;
-            const B = nextOperand.toArray ? nextOperand.toArray() : nextOperand;
-            const stepFrames = generateMultiplicationSteps(A, B, mathOps);
-            const tagged = stepFrames.map(f => ({ ...f, chainStep: i - 1 }));
-            frames.push(...tagged);
-            currentResult = math.multiply(currentResult, nextOperand);
+          let current = math.evaluate(parts[0], { ...get().variables });
+          for (let i = 1; i < parts.length; i++) {
+            const next = math.evaluate(parts[i], { ...get().variables });
+            const A = current.toArray();
+            const B = next.toArray();
+            const steps = generateMultiplicationSteps(A, B, numericOps).map(f => ({ ...f, chainStep: i - 1 }));
+            frames.push(...steps);
+            current = math.multiply(current, next);
           }
         }
       } else if (operationType === "gate") {
         const gateMatrix = result.toArray();
-        const gateName = preprocessedInput.trim();
-        frames = generateGateExplanationSteps(gateMatrix, gateName);
-        frames = frames.map(f => ({ ...f, chainStep: 0 }));
+        frames = generateGateExplanationSteps(gateMatrix, preprocessedInput.trim()).map(f => ({ ...f, chainStep: 0 }));
       }
-
-      set((state) => ({
+      set(state => ({
         cells: {
           ...state.cells,
           [cellId]: {
@@ -306,26 +597,16 @@ export const useQuantumStore = create((set, get) => ({
           },
         },
       }));
-    } catch (err) {
-      console.error("Frame generation error:", err);
-      set((state) => ({
-        cells: {
-          ...state.cells,
-          [cellId]: {
-            ...state.cells[cellId],
-            stepper: { frames: [], currentFrameIndex: 0, isPlaying: false },
-          },
-        },
-      }));
+    } catch (e) {
+      console.error("Frame generation error", e);
     }
   },
 
   nextFrame: (cellId) => {
-    set((state) => {
+    set(state => {
       const cell = state.cells[cellId];
       if (!cell) return state;
-      const { frames, currentFrameIndex } = cell.stepper;
-      const next = Math.min(currentFrameIndex + 1, frames.length - 1);
+      const next = Math.min(cell.stepper.currentFrameIndex + 1, cell.stepper.frames.length - 1);
       return {
         cells: {
           ...state.cells,
@@ -336,7 +617,7 @@ export const useQuantumStore = create((set, get) => ({
   },
 
   prevFrame: (cellId) => {
-    set((state) => {
+    set(state => {
       const cell = state.cells[cellId];
       if (!cell) return state;
       const prev = Math.max(cell.stepper.currentFrameIndex - 1, 0);
@@ -350,7 +631,7 @@ export const useQuantumStore = create((set, get) => ({
   },
 
   togglePlayback: (cellId) => {
-    set((state) => {
+    set(state => {
       const cell = state.cells[cellId];
       if (!cell) return state;
       return {
@@ -362,21 +643,21 @@ export const useQuantumStore = create((set, get) => ({
     });
   },
 
-  setFrameIndex: (cellId, index) => {
-    set((state) => {
+  setFrameIndex: (cellId, idx) => {
+    set(state => {
       const cell = state.cells[cellId];
       if (!cell) return state;
       return {
         cells: {
           ...state.cells,
-          [cellId]: { ...cell, stepper: { ...cell.stepper, currentFrameIndex: index } },
+          [cellId]: { ...cell, stepper: { ...cell.stepper, currentFrameIndex: idx } },
         },
       };
     });
   },
 
   setCellType: (cellId, type) => {
-    set((state) => ({
+    set(state => ({
       cells: {
         ...state.cells,
         [cellId]: { ...state.cells[cellId], type },

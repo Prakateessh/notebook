@@ -1,16 +1,9 @@
 // src/components/visualizer/VisualizerPanel.jsx
 //
-// Visualizer Panel — The Right‑Column "Video Player"
+// Visualizer Panel – with frame‑count debug helper
 // -----------------------------------------------------------------------
-// Purple‑theme polish:
-//   • Header title uses gradient‑text‑subtle (deep charcoal → faint purple).
-//   • The "Measure" button is wrapped in .glow-border-btn – a rotating
-//     lavender glow appears on hover.
-//   • PlaybackControls step buttons remain cyan for functional contrast.
-//   • Keyboard shortcuts unchanged.
-//
-// REMOVED: Bloch sphere – will be re‑added later in a dedicated layout.
-// This keeps the visualizer clean and focused on the stepper.
+// The header now shows `frames: N (idx M)` so you can instantly see if
+// the stepper has frames.
 
 import { useCallback, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -30,107 +23,68 @@ export function VisualizerPanel() {
   const hasError = useQuantumStore(
     (s) => !!s.cells[activeCellId]?.evaluation.error
   );
+  const frames = useQuantumStore(
+    (s) => s.cells[activeCellId]?.stepper.frames ?? []
+  );
+  const currentFrameIndex = useQuantumStore(
+    (s) => s.cells[activeCellId]?.stepper.currentFrameIndex ?? 0
+  );
+  const hasFrames = frames.length > 0;
 
   const activeCellNumber = cellOrder.indexOf(activeCellId) + 1;
-  const showEmptyState = !hasResult && !hasError;
+  const showEmptyState = !hasResult && !hasError && !hasFrames;
 
   const isStateVector = hasResult && isColumnVector(cellResult);
 
-  // Measurement handler
+  // Measurement handler (unchanged)
   const handleMeasure = useCallback(() => {
     if (!activeCellId || !isStateVector) return;
-
     let amplitudes;
     try {
       if (typeof cellResult.toArray === "function") {
         const arr = cellResult.toArray();
-        if (
-          Array.isArray(arr) &&
-          arr.length > 0 &&
-          Array.isArray(arr[0]) &&
-          arr[0].length === 1
-        ) {
-          amplitudes = arr.map((row) => row[0]);
+        if (Array.isArray(arr) && arr.length > 0 && Array.isArray(arr[0]) && arr[0].length === 1) {
+          amplitudes = arr.map(row => row[0]);
         } else if (Array.isArray(arr) && arr.length > 0 && !Array.isArray(arr[0])) {
           amplitudes = arr;
-        } else {
-          return;
-        }
-      } else {
-        return;
-      }
-    } catch {
-      return;
-    }
+        } else return;
+      } else return;
+    } catch { return; }
 
     const math = useQuantumStore.getState().math;
     if (!math) return;
-
-    let probabilities;
+    let probs;
     try {
-      probabilities = math.prob(amplitudes);
+      probs = math.prob(amplitudes);
     } catch {
-      probabilities = amplitudes.map((a) => {
-        const abs =
-          typeof a === "object" && a.re !== undefined
-            ? Math.hypot(a.re, a.im)
-            : Math.abs(a);
+      probs = amplitudes.map(a => {
+        const abs = typeof a === 'object' && a.re !== undefined ? Math.hypot(a.re, a.im) : Math.abs(a);
         return abs * abs;
       });
     }
-
     const r = Math.random();
-    let cum = 0;
-    let chosenIndex = 0;
-    for (let i = 0; i < probabilities.length; i++) {
-      cum += probabilities[i];
-      if (r <= cum) {
-        chosenIndex = i;
-        break;
-      }
+    let cum = 0, idx = 0;
+    for (let i = 0; i < probs.length; i++) {
+      cum += probs[i];
+      if (r <= cum) { idx = i; break; }
     }
-
-    const newAmplitudes = amplitudes.map((_, i) => (i === chosenIndex ? 1 : 0));
-
+    const newAmps = amplitudes.map((_, i) => (i === idx ? 1 : 0));
     let newResult;
-    try {
-      newResult = math.matrix(newAmplitudes.map((v) => [v]));
-    } catch {
-      newResult = newAmplitudes;
-    }
-
-    useQuantumStore.setState((state) => ({
-      cells: {
-        ...state.cells,
-        [activeCellId]: {
-          ...state.cells[activeCellId],
-          evaluation: {
-            ...state.cells[activeCellId].evaluation,
-            result: newResult,
-          },
-          stepper: { frames: [], currentFrameIndex: 0, isPlaying: false },
-        },
-      },
+    try { newResult = math.matrix(newAmps.map(v => [v])); } catch { newResult = newAmps; }
+    useQuantumStore.setState(state => ({
+      cells: { ...state.cells, [activeCellId]: { ...state.cells[activeCellId], evaluation: { ...state.cells[activeCellId].evaluation, result: newResult }, stepper: { frames: [], currentFrameIndex: 0, isPlaying: false } } }
     }));
   }, [activeCellId, isStateVector, cellResult]);
 
-  // Keyboard shortcuts – focus‑based
+  // Keyboard shortcuts (unchanged)
   const panelRef = useRef(null);
   useEffect(() => {
     const el = panelRef.current;
     if (!el) return;
-
     const handleKeyDown = (e) => {
       const active = document.activeElement;
-      if (
-        active?.tagName === "INPUT" ||
-        active?.tagName === "TEXTAREA" ||
-        active?.isContentEditable
-      )
-        return;
-
+      if (active?.tagName === "INPUT" || active?.tagName === "TEXTAREA" || active?.isContentEditable) return;
       if (!activeCellId) return;
-
       if (e.key === "ArrowLeft") {
         e.preventDefault();
         useQuantumStore.getState().prevFrame(activeCellId);
@@ -142,7 +96,6 @@ export function VisualizerPanel() {
         useQuantumStore.getState().togglePlayback(activeCellId);
       }
     };
-
     el.addEventListener("keydown", handleKeyDown);
     return () => el.removeEventListener("keydown", handleKeyDown);
   }, [activeCellId]);
@@ -153,19 +106,24 @@ export function VisualizerPanel() {
       tabIndex={0}
       className="flex h-full flex-col bg-white/60 backdrop-blur-glass outline-none transition-shadow duration-200 focus:ring-2 focus:ring-purple-300/60 focus:ring-inset"
     >
-      {/* --- Header --- */}
+      {/* Header with debug info */}
       <div className="flex items-center justify-between border-b border-purple-100/70 px-6 py-4">
         <h2 className="font-ui text-sm font-medium tracking-wide gradient-text-subtle">
           Visualizer
         </h2>
-        <span className="font-code text-xs text-slate-400">
-          {activeCellId
-            ? `watching In [${activeCellNumber}]`
-            : "no cell selected"}
-        </span>
+        <div className="flex items-center gap-3">
+          {hasFrames && (
+            <span className="font-code text-[10px] text-cyan-600 bg-cyan-50 px-2 py-0.5 rounded-full">
+              frames: {frames.length} (idx {currentFrameIndex})
+            </span>
+          )}
+          <span className="font-code text-xs text-slate-400">
+            {activeCellId ? `watching In [${activeCellNumber}]` : "no cell selected"}
+          </span>
+        </div>
       </div>
 
-      {/* --- Main stage: MatrixStepper or empty‑state watermark --- */}
+      {/* Main stage */}
       <div className="relative flex flex-1 flex-col items-center justify-center overflow-auto px-6 py-4">
         <AnimatePresence mode="wait">
           {showEmptyState ? (
@@ -202,25 +160,19 @@ export function VisualizerPanel() {
         </AnimatePresence>
       </div>
 
-      {/* --- Footer strip: playback + probability, plus Measure button --- */}
-      {activeCellId && (
+      {/* Footer: controls + measure button */}
+      {activeCellId && !showEmptyState && (
         <div className="border-t border-purple-100/70 px-6 py-4">
           <div className="grid grid-cols-2 gap-6 mb-4">
             <PlaybackControls cellId={activeCellId} />
             <ProbabilityPanel cellId={activeCellId} />
           </div>
-
           {isStateVector && (
             <div className="glow-border-btn rounded-xl">
               <motion.button
                 onClick={handleMeasure}
                 whileTap={{ scale: 0.95 }}
-                className="
-                  w-full rounded-xl border-2 border-purple-200 bg-purple-50/70
-                  py-2.5 font-ui text-xs font-semibold text-purple-700
-                  backdrop-blur-sm transition-all duration-300
-                  hover:bg-purple-100 hover:border-purple-300
-                "
+                className="w-full rounded-xl border-2 border-purple-200 bg-purple-50/70 py-2.5 font-ui text-xs font-semibold text-purple-700 backdrop-blur-sm transition-all duration-300 hover:bg-purple-100 hover:border-purple-300"
               >
                 Measure
               </motion.button>
@@ -240,14 +192,10 @@ function isColumnVector(result) {
       arr = result.toArray();
     } else if (Array.isArray(result)) {
       arr = result;
-    } else {
-      return false;
-    }
+    } else return false;
     if (!Array.isArray(arr) || arr.length === 0) return false;
-    return arr.every((row) => Array.isArray(row) && row.length === 1);
-  } catch {
-    return false;
-  }
+    return arr.every(row => Array.isArray(row) && row.length === 1);
+  } catch { return false; }
 }
 
 function WatermarkPattern() {
@@ -261,19 +209,13 @@ function WatermarkPattern() {
     { glyph: "|00⟩", top: "55%", left: "45%", size: "2.5rem", rotate: 3 },
     { glyph: "H", top: "35%", left: "82%", size: "3.5rem", rotate: -4 },
   ];
-
   return (
     <div className="pointer-events-none absolute inset-0 overflow-hidden opacity-[0.05]">
       {placements.map((p, i) => (
         <span
           key={i}
           className="font-math absolute select-none text-purple-300"
-          style={{
-            top: p.top,
-            left: p.left,
-            fontSize: p.size,
-            transform: `rotate(${p.rotate}deg)`,
-          }}
+          style={{ top: p.top, left: p.left, fontSize: p.size, transform: `rotate(${p.rotate}deg)` }}
         >
           {p.glyph}
         </span>

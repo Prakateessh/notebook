@@ -27,11 +27,29 @@
 //   3. Slower, clearer pacing: source-pause -> measured flight ->
 //      bounce-landing -> brief hold before advancing, using
 //      DURATIONS.cinematic consistently instead of arbitrary numbers.
+//
+// SYMBOLIC MATRIX FIX: formatScalar() previously only handled plain
+// numbers and math.js Complex objects ({re, im}). When this component
+// is used for a symbolic Kronecker product (scalar is a SymbolicNode
+// instance from symbolicEngine.js — e.g. a SymbolicScalar holding a
+// variable name like "a_11"), the old code fell through to
+// `round(value)`, which is `Math.round(SymbolicNode * 1000)` — NaN,
+// since a SymbolicNode isn't a number. That made the caption literally
+// read "A[i][j] = NaN" for every symbolic Kronecker step. Fixed by
+// checking `instanceof SymbolicNode` first and calling `.toLatex()`,
+// matching the same pattern already used in MatrixStepper.jsx's
+// formatShort(). Note: this caption is plain text, not run through
+// KaTeX, so the output will be raw LaTeX source (e.g. "a_{11}") rather
+// than a rendered subscript — still far better than NaN, but if you
+// want it properly typeset, wrap this part of the caption in
+// <InlineMath> from react-katex instead of interpolating it as a
+// string.
 
 import { useRef, useState, useLayoutEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { MatrixCell } from "./MatrixCell";
 import { FLY_TRAVEL, PLAYFUL_BOUNCE, DURATIONS } from "../../lib/motionPresets";
+import { SymbolicNode } from "../../lib/symbolicEngine";
 
 /**
  * @param {object} props
@@ -221,6 +239,9 @@ function DestinationOutline({ matrixB, blockOffset, resultCols }) {
 }
 
 function formatScalar(value) {
+  if (value instanceof SymbolicNode) {
+    return value.toLatex();
+  }
   if (typeof value === "object" && value !== null && "re" in value) {
     return value.im === 0 ? `${round(value.re)}` : `${round(value.re)}+${round(value.im)}i`;
   }

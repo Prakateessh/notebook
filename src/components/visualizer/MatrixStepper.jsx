@@ -2,10 +2,8 @@
 //
 // Visual Stepper Orchestration Engine
 // -----------------------------------------------------------------------
-// Updated to support chained multiplications. Frames now carry a
-// `chainStep` property; the MultiplicationFrame uses it to scope
-// layout IDs, preventing Framer Motion from mixing cells of different
-// multiplication phases.
+// StaticResultDisplay now handles plain objects (like {message:...}) and
+// unknown objects gracefully.
 
 import { useEffect, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -16,6 +14,7 @@ import { MatrixCell } from "./MatrixCell";
 import { KroneckerStepper } from "./KroneckerStepper";
 import { GateColumnDisplay } from "./GateStepper";
 import { MATRIX_MORPH, PLAYFUL_BOUNCE, cascadeTransition } from "../../lib/motionPresets";
+import { SymbolicMatrix, SymbolicScalar, SymbolicNode } from "../../lib/symbolicEngine";
 
 export function MatrixStepper({ cellId }) {
   const frames = useQuantumStore((s) => s.cells[cellId]?.stepper.frames ?? []);
@@ -40,8 +39,6 @@ export function MatrixStepper({ cellId }) {
     return () => clearTimeout(timer);
   }, [isPlaying, currentFrameIndex, frames.length, nextFrame, cellId]);
 
-  // For "cell-compute" frames we extract A and B dimensions from the frames that have the same chainStep.
-  // This memo is still used for the static A/B grids at the top of each multiplication phase.
   const { matrixA, matrixB, resultDims } = useMemo(() => {
     if (!frames.length) return { matrixA: null, matrixB: null, resultDims: null };
 
@@ -77,7 +74,9 @@ export function MatrixStepper({ cellId }) {
     };
   }, [frames, currentFrame]);
 
-  if (!frames.length && !rawResult && !errorMessage) return null;
+  if (!frames.length && !rawResult && !errorMessage) {
+    return null;
+  }
 
   if (!frames.length && rawResult) {
     return (
@@ -135,18 +134,21 @@ export function MatrixStepper({ cellId }) {
 }
 
 // ------------------------------------------------------------------
-// Multiplication frame – now uses `chainStep` for layoutId scoping
+// Multiplication frame
 // ------------------------------------------------------------------
 function MultiplicationFrame({ cellId, frame, matrixA, matrixB, resultDims }) {
   const { rowIndex, colIndex, terms, resultSoFar, runningSum, chainStep = 0 } = frame;
 
   const sumString = terms
-    .map((term) => `${formatShort(term.a)} × ${formatShort(term.b)}`)
+    .map((term) => {
+      const aStr = term.a instanceof SymbolicNode ? term.a.toLatex() : formatShort(term.a);
+      const bStr = term.b instanceof SymbolicNode ? term.b.toLatex() : formatShort(term.b);
+      return `${aStr} × ${bStr}`;
+    })
     .join(" + ");
 
-  const resultString = `${formatShort(runningSum)}`;
+  const resultString = runningSum instanceof SymbolicNode ? runningSum.toLatex() : formatShort(runningSum);
 
-  // Prefix layoutIds with chainStep to avoid collisions between phases
   const prefix = `${cellId}-chain${chainStep}`;
 
   return (
@@ -213,6 +215,9 @@ function MultiplicationFrame({ cellId, frame, matrixA, matrixB, resultDims }) {
   );
 }
 
+// ------------------------------------------------------------------
+// Complete frame
+// ------------------------------------------------------------------
 function CompleteFrame({ cellId, resultSoFar, isKronecker, isGate, matrix, gateName }) {
   if (isGate && matrix) {
     return (
@@ -253,6 +258,9 @@ function CompleteFrame({ cellId, resultSoFar, isKronecker, isGate, matrix, gateN
   );
 }
 
+// ------------------------------------------------------------------
+// MatrixGrid
+// ------------------------------------------------------------------
 function MatrixGrid({ matrix, getLayoutId, getState }) {
   return (
     <div className="flex flex-col gap-1 rounded-lg border border-slate-200 bg-slate-50/60 p-2.5">
@@ -272,8 +280,12 @@ function MatrixGrid({ matrix, getLayoutId, getState }) {
   );
 }
 
+// ------------------------------------------------------------------
+// Helpers
+// ------------------------------------------------------------------
 function formatShort(value) {
   if (value === null || value === undefined) return "?";
+  if (value instanceof SymbolicNode) return value.toLatex();
   if (typeof value === "object" && "re" in value) {
     const r = round(value.re);
     const i = round(value.im);
@@ -288,9 +300,52 @@ function round(n) {
   return Math.round(n * 1000) / 1000;
 }
 
-// --- Static Result Display (unchanged) ---
+// ------------------------------------------------------------------
+// StaticResultDisplay – handles symbolic, plain objects, and numeric
+// ------------------------------------------------------------------
 function StaticResultDisplay({ result, cellId }) {
   if (result === null || result === undefined) return null;
+
+  // ----- symbolic matrix -----
+  if (result instanceof SymbolicMatrix) {
+    return (
+      <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-2.5">
+        <MatrixGrid
+          matrix={result.grid}
+          getLayoutId={(r, c) => `${cellId}-static-${r}-${c}`}
+          getState={() => "settled"}
+        />
+      </div>
+    );
+  }
+
+  // ----- symbolic scalar -----
+  if (result instanceof SymbolicScalar) {
+    return (
+      <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-4 font-math">
+        <InlineMath math={result.toLatex()} />
+      </div>
+    );
+  }
+
+  // ----- plain object (e.g., {message: ...}) -----
+  if (typeof result === "object" && result !== null && !Array.isArray(result) && !result.toArray) {
+    if (typeof result.message === "string") {
+      return (
+        <div className="rounded-lg border border-purple-200 bg-purple-50/60 p-4 font-ui text-sm text-purple-800">
+          {result.message}
+        </div>
+      );
+    }
+    // fallback: show JSON
+    return (
+      <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-4 font-code text-xs text-slate-600">
+        {JSON.stringify(result, null, 2)}
+      </div>
+    );
+  }
+
+  // ----- numeric matrix -----
   let matrix = null;
   try {
     if (typeof result.toArray === "function") {
@@ -302,6 +357,7 @@ function StaticResultDisplay({ result, cellId }) {
   } catch {
     matrix = null;
   }
+
   if (matrix) {
     return (
       <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-2.5">
@@ -313,6 +369,8 @@ function StaticResultDisplay({ result, cellId }) {
       </div>
     );
   }
+
+  // scalar fallback
   const latex = resultToLatex(result);
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-4 font-math">

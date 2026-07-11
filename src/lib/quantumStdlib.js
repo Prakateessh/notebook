@@ -6,23 +6,7 @@
 // commutator(A,B), anticommutator(A,B), isUnitary(M), controlled(U),
 // expect(O, state), variance(O, state).
 //
-// NEW: variance(operator, state) = ⟨ψ|O²|ψ⟩ – ⟨ψ|O|ψ⟩²
-//       (uncertainty is sqrt(variance))
-//
-// Extended with additional common gates: S, T, SWAP, CZ, CY, CH, CCNOT.
-//
-// Design notes:
-// - All gates are returned as math.matrix() so they compose correctly
-//   with math.multiply, math.kron, etc.
-// - Rotation gates are functions of an angle (in radians).
-// - controlled(U) takes a 2×2 matrix U and returns a 4×4 controlled‑U gate.
-// - dagger(A) = conjugate transpose.
-// - prob(state) = Born rule: |amplitude|^2 for each component.
-// - commutator(A,B) = A*B - B*A
-// - anticommutator(A,B) = A*B + B*A
-// - isUnitary(M) = true if M * dagger(M) ≈ identity
-// - expect(O, state) = ⟨ψ|O|ψ⟩ (complex number or real)
-// - variance(O, state) = ⟨ψ|O²|ψ⟩ – ⟨ψ|O|ψ⟩²
+// FIX: isUnitary now uses array indexing for math.size() result.
 
 /**
  * Injects the quantum gate library and helper functions into a
@@ -196,9 +180,9 @@ export function injectQuantumStdlib(math) {
   function isUnitary(M) {
     const dg = dagger(M);
     const prod = math.multiply(M, dg);
-    const size = math.size(prod);
-    const rows = size.get([0]);
-    const cols = size.get([1]);
+    const size = math.size(prod);          // returns an array [rows, cols] in your version
+    const rows = size[0];                  // FIX: use array indexing, not .get()
+    const cols = size[1];
     if (rows !== cols) return false;
     const tol = 1e-10;
     for (let i = 0; i < rows; i++) {
