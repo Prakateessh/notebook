@@ -173,7 +173,7 @@ export function NotebookColumn() {
         {/* Header with export/import/cheatsheet buttons */}
         <div className="mb-6 flex items-center justify-between">
           <h1 className="font-ui text-sm font-medium tracking-wide gradient-text-subtle">
-            quantum‑scratchpad
+            Quantum Scratchpad
           </h1>
           <div className="flex items-center gap-3">
             <span className="font-code text-xs text-slate-500">

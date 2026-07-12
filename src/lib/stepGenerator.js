@@ -281,3 +281,115 @@ export function generateGateExplanationSteps(gateMatrix, gateName) {
 
   return frames;
 }
+ 
+
+// src/lib/stepGenerator.js
+//
+// Visual Stepper Frame Generator
+// -----------------------------------------------------------------------
+// … (existing comments and functions remain exactly as they were) …
+
+// ============================================================
+// DETAILED GATE DERIVATION – Equation‑Rich Steps
+// ============================================================
+
+/**
+ * Generates extremely detailed step‑by‑step frames for building a gate
+ * matrix from user‑specified basis‑state mappings.
+ *
+ * For each input‑output pair:
+ *   1. Mapping frame:      U|basis⟩ = |output⟩  (the given equation).
+ *   2. Outer‑product frame: |output⟩⟨basis|     (the matrix contribution).
+ *   3. Addition frame:      accumulator + outer product → new accumulator.
+ *
+ * @param {Array<Array<number>>} outputColumns – ordered array of output
+ *        column vectors (each a 2D array of shape 2^n × 1)
+ * @param {Array<string>} basisLabels – e.g. ["|00⟩","|01⟩","|10⟩","|11⟩"]
+ * @param {string} gateName – name of the gate being defined
+ * @returns {Array<object>} frames – last frame is type "complete"
+ */
+export function generateGateDerivationDetailed(outputColumns, basisLabels, gateName) {
+  const n = outputColumns.length;
+  const qubits = Math.log2(n);
+  if (!Number.isInteger(qubits)) {
+    throw new Error("Number of output columns must be a power of 2.");
+  }
+
+  const frames = [];
+  // Running sum matrix (starts as zero)
+  let accumulator = Array.from({ length: n }, () => Array(n).fill(0));
+
+  for (let j = 0; j < n; j++) {
+    const outputVec = outputColumns[j]; // 2D column (n × 1)
+    const basisLabel = basisLabels[j];
+
+    // Ensure outputVec is a proper 2D column of scalars
+    const safeOutputVec = outputVec.map(r =>
+      Array.isArray(r) ? [r[0]] : [r]
+    );
+
+    // ---- 1. Mapping frame ----
+    frames.push({
+      type: "mapping",
+      gateName,
+      stepIndex: j,
+      inputBasis: basisLabel,
+      outputVector: safeOutputVec,
+      numQubits: qubits,
+    });
+
+    // ---- 2. Compute the outer product ----
+    const basisRow = Array(n).fill(0);
+    basisRow[j] = 1;   // ⟨basis| has 1 at position j
+
+    const outerMatrix = [];
+    for (let r = 0; r < n; r++) {
+      const row = [];
+      for (let c = 0; c < n; c++) {
+        const ov = safeOutputVec[r][0];
+        row.push(ov * basisRow[c]);
+      }
+      outerMatrix.push(row);
+    }
+
+    // Outer‑product frame
+    frames.push({
+      type: "outer-product",
+      gateName,
+      stepIndex: j,
+      inputBasis: basisLabel,
+      outputVector: safeOutputVec,
+      basisRow,
+      outerMatrix,
+      numQubits: qubits,
+    });
+
+    // ---- 3. Add to accumulator ----
+    const prevAccumulator = accumulator.map(r => [...r]);
+    accumulator = accumulator.map((row, r) =>
+      row.map((val, c) => val + outerMatrix[r][c])
+    );
+
+    // Addition frame
+    frames.push({
+      type: "addition",
+      gateName,
+      stepIndex: j,
+      inputBasis: basisLabel,
+      prevMatrix: prevAccumulator,
+      outerMatrix,
+      newMatrix: accumulator.map(r => [...r]),
+      numQubits: qubits,
+    });
+  }
+
+  // Final complete frame
+  frames.push({
+    type: "complete",
+    gateName,
+    matrix: accumulator,
+    numQubits: qubits,
+  });
+
+  return frames;
+}
